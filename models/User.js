@@ -59,10 +59,16 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  // tokens created before this date are refused (set when the password changes)
+  // date of the last password change (information only)
   passwordChangedAt: {
     type: Date,
     default: null
+  },
+  // saved inside every token; +1 when the password changes,
+  // so ALL older tokens are refused (logs out other devices)
+  tokenVersion: {
+    type: Number,
+    default: 0
   },
 
 }, { timestamps: true });

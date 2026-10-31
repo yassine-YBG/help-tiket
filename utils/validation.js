@@ -15,7 +15,12 @@ const isValidId = (id) => typeof id === 'string' && OBJECT_ID_RE.test(id);
 // true for a non-empty string after trimming
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
 
+// Escape regex special characters so "a.b*" is searched literally
+// (also blocks ReDoS: a user can't send a slow regex pattern).
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 module.exports = {
+  escapeRegex,
   TICKET_STATUSES,
   TICKET_PRIORITIES,
   USER_ROLES,

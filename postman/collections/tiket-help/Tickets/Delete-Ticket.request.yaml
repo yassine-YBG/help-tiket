@@ -2,7 +2,7 @@ $kind: http-request
 name: 'Delete Ticket'
 order: 9000
 method: DELETE
-url: '{{baseUrl}}/api/tickets/:id'
+url: '{{baseUrl}}/api/tickets/:id?deleteFiles=false'
 pathVariables:
   - key: id
     value: 'TICKET_ID_HERE'

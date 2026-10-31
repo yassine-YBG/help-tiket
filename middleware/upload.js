@@ -1,8 +1,11 @@
 const multer = require('multer');
 const fs = require('fs');
+const path = require('path');
 
+// Dossier des fichiers: uploads/tickets par défaut (UPLOAD_DIR dans .env pour le changer;
+// les tests automatiques utilisent un dossier temporaire).
 // Créer le dossier uploads s'il n'existe pas
-const uploadDir = 'uploads/tickets';
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'uploads/tickets');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -56,3 +59,4 @@ const upload = multer({
 });
 
 module.exports = upload;
+module.exports.uploadDir = uploadDir; // used by the download / delete code

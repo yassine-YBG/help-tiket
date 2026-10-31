@@ -2,4 +2,4 @@ $kind: http-request
 name: 'Get Users'
 order: 3000
 method: GET
-url: '{{baseUrl}}/api/auth/users'
+url: '{{baseUrl}}/api/auth/users?page=1&limit=20'

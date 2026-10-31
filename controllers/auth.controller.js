@@ -2,10 +2,26 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const logActivity = require('../utils/logActivity');
-const { USER_ROLES, EMAIL_RE, isValidId, isNonEmptyString } = require('../utils/validation');
+const {
+  USER_ROLES,
+  EMAIL_RE,
+  isValidId,
+  isNonEmptyString,
+  escapeRegex,
+} = require('../utils/validation');
+const { parsePagination, buildPaginationInfo } = require('../utils/pagination');
 
 const MIN_PASSWORD_LENGTH = 6;
 const NOT_DELETED = { deleted: { $ne: true } }; // also matches old docs without the field
+
+const USER_LIST_FIELDS = 'userId username lastname email role activated createdAt';
+const USER_LIST_FILTERS = ['page', 'limit', 'search', 'role', 'activated', 'sort'];
+const USER_SORTS = {
+  newest: { createdAt: -1, _id: -1 },
+  oldest: { createdAt: 1, _id: 1 },
+  name: { username: 1, lastname: 1, _id: 1 },
+};
+const MAX_SEARCH_LENGTH = 100;
 
 // Shared rule for every "admin acts on another user" action:
 // - nobody can act on their own account (no self-delete / self-deactivate / self-demote)
@@ -23,8 +39,13 @@ const checkCanManage = (requester, target) => {
 };
 
 // One place to create tokens (login + change password)
+// "tv" = token version: must match user.tokenVersion (see auth.middleware.js)
 const signToken = (user) =>
-  jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1d' });
+  jwt.sign(
+    { userId: user._id, role: user.role, tv: user.tokenVersion || 0 },
+    process.env.JWT_SECRET,
+    { expiresIn: '1d' }
+  );
 
 // Public profile sent to the frontend (never the password hash)
 const toPublicUser = (user) => ({
@@ -172,8 +193,8 @@ exports.changePassword = async (req, res) => {
     }
 
     user.password = await bcrypt.hash(newPassword, 10);
-    // 1 second in the past so the new token below (same second) stays valid
-    user.passwordChangedAt = new Date(Date.now() - 1000);
+    user.passwordChangedAt = new Date();
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // every older token is now refused
     await user.save();
 
     await logActivity({
@@ -191,10 +212,68 @@ exports.changePassword = async (req, res) => {
 };
 
 // Get all users (admin and superadmin)
+// GET /api/auth/users?page=1&limit=20&search=ali&role=admin,user&activated=true&sort=name
+// Same response shape as the ticket lists: { users, pagination, sort }
 exports.getUsers = async (req, res) => {
+  const pagination = parsePagination(req.query);
+  if (pagination.error) return res.status(400).json({ error: pagination.error });
+
+  for (const key of Object.keys(req.query)) {
+    if (!USER_LIST_FILTERS.includes(key)) {
+      return res.status(400).json({ error: `Unknown filter: "${key}"` });
+    }
+    if (typeof req.query[key] !== 'string') {
+      return res.status(400).json({ error: `Filter "${key}" must be a single text value` });
+    }
+  }
+
+  const { search, role, activated, sort = 'newest' } = req.query;
+  const filter = { ...NOT_DELETED };
+
+  if (search !== undefined) {
+    const text = search.trim();
+    if (!text) return res.status(400).json({ error: '"search" cannot be empty' });
+    if (text.length > MAX_SEARCH_LENGTH) {
+      return res.status(400).json({ error: `"search" must be at most ${MAX_SEARCH_LENGTH} characters` });
+    }
+    const regex = { $regex: escapeRegex(text), $options: 'i' };
+    filter.$or = [{ username: regex }, { lastname: regex }, { email: regex }];
+  }
+
+  if (role !== undefined) {
+    const roles = role.split(',').map((r) => r.trim()).filter(Boolean);
+    const bad = roles.find((r) => !USER_ROLES.includes(r));
+    if (!roles.length || bad) {
+      return res.status(400).json({ error: `Invalid role "${bad || ''}". Allowed: ${USER_ROLES.join(', ')}` });
+    }
+    filter.role = { $in: roles };
+  }
+
+  if (activated !== undefined) {
+    if (activated !== 'true' && activated !== 'false') {
+      return res.status(400).json({ error: '"activated" must be true or false' });
+    }
+    filter.activated = activated === 'true';
+  }
+
+  if (!USER_SORTS[sort]) {
+    return res.status(400).json({ error: `Invalid sort. Allowed: ${Object.keys(USER_SORTS).join(', ')}` });
+  }
+
   try {
-    const users = await User.find(NOT_DELETED, 'username lastname email role activated');
-    return res.status(200).json(users);
+    const [users, total] = await Promise.all([
+      User.find(filter, USER_LIST_FIELDS)
+        .sort(USER_SORTS[sort])
+        .skip(pagination.skip)
+        .limit(pagination.limit),
+      User.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      users,
+      pagination: buildPaginationInfo({ page: pagination.page, limit: pagination.limit, total }),
+      sort,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
