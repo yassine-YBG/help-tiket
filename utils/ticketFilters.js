@@ -14,15 +14,17 @@
 //   sort       newest | oldest | priority         ?sort=priority
 
 const mongoose = require('mongoose');
-const { TICKET_STATUSES, TICKET_PRIORITIES, PRIORITY_WEIGHT, isValidId } = require('./validation');
+const {
+  TICKET_STATUSES,
+  TICKET_PRIORITIES,
+  PRIORITY_WEIGHT,
+  isValidId,
+  escapeRegex,
+} = require('./validation');
 
 const SORT_OPTIONS = ['newest', 'oldest', 'priority'];
 const MAX_SEARCH_LENGTH = 100;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-// Escape regex special characters so "a.b*" is searched literally
-// (also blocks ReDoS: a user can't send a slow regex pattern).
-const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // "a, b ,c" -> ['a','b','c']
 const splitList = (value) =>

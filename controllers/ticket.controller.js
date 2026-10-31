@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 
-const UPLOAD_BASE = path.resolve('uploads/tickets');
+const UPLOAD_BASE = require('../middleware/upload').uploadDir;
 
 // ---------- helpers ----------
 
@@ -35,12 +35,29 @@ const ticketPopulate = (user) => {
   ];
 };
 
+// Safe absolute path of an attachment on disk.
+// Uses the stored file NAME only (never a path from the database), so:
+// - no "../" tricks can escape the uploads folder
+// - paths saved on Windows ("uploads\tickets\x.pdf") still work on a Linux server
+const storedFilePath = (attachment) => {
+  const name = attachment.filename || String(attachment.path || '').split(/[\\/]/).pop();
+  const safePath = path.join(UPLOAD_BASE, path.basename(name || ''));
+  return safePath.startsWith(UPLOAD_BASE + path.sep) ? safePath : null;
+};
+
+// Every attachment of a ticket: the ticket's own files + the files of all replies
+const allAttachments = (ticket) => [
+  ...ticket.attachments,
+  ...ticket.messages.flatMap((m) => m.attachments || []),
+];
+
 // Turn multer files into attachment sub-documents
 const toAttachments = (files, extra = {}) =>
   (files || []).map((file) => ({
     filename: file.filename,
     originalName: file.originalname,
-    path: file.path,
+    // relative path ("uploads/tickets/x.pdf"): never expose the server's full folder path
+    path: path.relative(process.cwd(), file.path),
     mimetype: file.mimetype,
     size: file.size,
     ...extra,
@@ -275,9 +292,8 @@ exports.downloadAttachment = async (req, res) => {
 
     if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
 
-    // Only the file name is used -> no "../" path tricks possible
-    const safePath = path.join(UPLOAD_BASE, path.basename(attachment.path));
-    if (!safePath.startsWith(UPLOAD_BASE + path.sep)) {
+    const safePath = storedFilePath(attachment);
+    if (!safePath) {
       return res.status(400).json({ error: 'Invalid file path' });
     }
     if (!fs.existsSync(safePath)) {
@@ -349,10 +365,18 @@ exports.updateStatus = async (req, res) => {
 exports.getMyTickets = (req, res) =>
   listTickets(req, res, { onlyMine: true, defaultSort: 'priority' });
 
-// Soft delete a ticket (admin / superadmin) — hidden but kept in the DB
+// Soft delete a ticket (admin / superadmin) — hidden but kept in the DB.
+// DELETE /api/tickets/:id                  -> files stay on disk (default)
+// DELETE /api/tickets/:id?deleteFiles=true -> also removes its files from disk
 exports.softDeleteTicket = async (req, res) => {
   const { id } = req.params;
   if (!isValidId(id)) return res.status(400).json({ error: 'Invalid ticket id' });
+
+  const { deleteFiles } = req.query;
+  if (deleteFiles !== undefined && deleteFiles !== 'true' && deleteFiles !== 'false') {
+    return res.status(400).json({ error: '"deleteFiles" must be true or false' });
+  }
+  const removeFiles = deleteFiles === 'true';
 
   try {
     const ticket = await findActiveTicket(id);
@@ -361,14 +385,29 @@ exports.softDeleteTicket = async (req, res) => {
     ticket.deleted = true;
     await ticket.save();
 
+    let filesDeleted = 0;
+    if (removeFiles) {
+      for (const attachment of allAttachments(ticket)) {
+        const filePath = storedFilePath(attachment);
+        if (!filePath) continue;
+        try {
+          await fs.promises.unlink(filePath);
+          filesDeleted++;
+        } catch (err) {
+          // already gone = fine; anything else is logged but doesn't fail the delete
+          if (err.code !== 'ENOENT') console.error('❌ Failed to delete file:', filePath, err.message);
+        }
+      }
+    }
+
     await logActivity({
       user: req.user.userId,
-      action: `Soft deleted ticket: ${ticket.subject}`,
+      action: `Soft deleted ticket: ${ticket.subject}${removeFiles ? ` (${filesDeleted} file(s) removed)` : ''}`,
       target: ticket._id,
       targetModel: 'Ticket'
     });
 
-    return res.status(200).json({ message: 'Ticket soft deleted' });
+    return res.status(200).json({ message: 'Ticket soft deleted', filesDeleted });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });

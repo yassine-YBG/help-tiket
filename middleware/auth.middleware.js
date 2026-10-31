@@ -21,13 +21,14 @@ exports.verifyToken = async (req, res, next) => {
   }
 
   try {
-    const user = await User.findById(decoded.userId).select('role activated deleted passwordChangedAt');
+    const user = await User.findById(decoded.userId).select('role activated deleted tokenVersion');
     if (!user || user.deleted || !user.activated) {
       return res.status(401).json({ error: 'Account disabled or not found' });
     }
 
     // token created before the last password change -> log in again
-    if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+    // (tokens from before this feature have no "tv" = version 0)
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
       return res.status(401).json({ error: 'Password changed, please log in again' });
     }
 
