@@ -1,0 +1,8 @@
+$kind: http-request
+name: 'Restore User'
+order: 5500
+method: PUT
+url: '{{baseUrl}}/api/auth/users/:id/restore'
+pathVariables:
+  - key: id
+    value: 'USER_ID_HERE'

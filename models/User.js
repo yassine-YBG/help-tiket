@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
+const { USER_ROLES } = require('../utils/validation');
 
 const userSchema = new mongoose.Schema({
 
@@ -16,7 +18,10 @@ const userSchema = new mongoose.Schema({
       const minute = pad(now.getMinutes());
       const second = pad(now.getSeconds());
 
-      return `U-${year}${month}${day}T${hour}${minute}${second}`;
+      // random suffix: two sign-ups in the same second no longer collide
+      const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+
+      return `U-${year}${month}${day}T${hour}${minute}${second}-${suffix}`;
     }
   },
 
@@ -34,7 +39,8 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    lowercase: true
+    lowercase: true,
+    trim: true
   },
   password: {
     type: String,
@@ -42,13 +48,23 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'superadmin'],
+    enum: USER_ROLES,
     default: 'user'
   },
   activated: {
     type: Boolean,
-    default: false 
-  }
+    default: false
+  },
+  deleted: {
+    type: Boolean,
+    default: false
+  },
+  // tokens created before this date are refused (set when the password changes)
+  passwordChangedAt: {
+    type: Date,
+    default: null
+  },
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

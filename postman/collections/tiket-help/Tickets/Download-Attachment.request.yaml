@@ -1,0 +1,12 @@
+$kind: http-request
+name: 'Download Attachment'
+order: 8000
+method: GET
+url: '{{baseUrl}}/api/tickets/:ticketId/attachment/:type/:attachmentId/download'
+pathVariables:
+  - key: ticketId
+    value: 'TICKET_ID_HERE'
+  - key: type
+    value: 'ticket'
+  - key: attachmentId
+    value: 'ATTACHMENT_ID_HERE'

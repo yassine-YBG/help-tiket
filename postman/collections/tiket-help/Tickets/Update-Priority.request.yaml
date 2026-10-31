@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Update Priority'
+order: 6000
+method: PUT
+url: '{{baseUrl}}/api/tickets/priority/:id'
+headers:
+  - key: Content-Type
+    value: application/json
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'
+body:
+  type: json
+  content: |-
+    {
+      "priority": "high"
+    }

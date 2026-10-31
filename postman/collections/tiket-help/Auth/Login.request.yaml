@@ -1,0 +1,26 @@
+$kind: http-request
+name: Login
+order: 2000
+method: POST
+url: '{{baseUrl}}/api/auth/login'
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "email": "yassine@example.com",
+      "password": "password123"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const response = pm.response.json();
+      if (response.token) {
+        pm.collectionVariables.set('token', response.token);
+        console.log('Token saved to collection variable');
+      }

@@ -1,0 +1,5 @@
+$kind: http-request
+name: 'Get Stats'
+order: 1000
+method: GET
+url: '{{baseUrl}}/api/stats?interval=day'

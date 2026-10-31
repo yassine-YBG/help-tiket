@@ -1,0 +1,9 @@
+$kind: collection
+description: API collection for the tiket-help support ticket system
+variables:
+  baseUrl: http://localhost:3000
+  token: ""
+auth:
+  type: bearer
+  credentials:
+    token: "{{token}}"

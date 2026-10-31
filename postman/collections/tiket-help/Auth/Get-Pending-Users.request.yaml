@@ -1,0 +1,5 @@
+$kind: http-request
+name: 'Get Pending Users'
+order: 4000
+method: GET
+url: '{{baseUrl}}/api/auth/users/pending'

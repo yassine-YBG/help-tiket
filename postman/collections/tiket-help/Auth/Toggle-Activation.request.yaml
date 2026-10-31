@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Toggle Activation'
+order: 6000
+method: PUT
+url: '{{baseUrl}}/api/auth/users/:id/activation'
+headers:
+  - key: Content-Type
+    value: application/json
+pathVariables:
+  - key: id
+    value: 'USER_ID_HERE'
+body:
+  type: json
+  content: |-
+    {
+      "activated": true
+    }

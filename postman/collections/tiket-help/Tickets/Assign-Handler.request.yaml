@@ -1,0 +1,8 @@
+$kind: http-request
+name: 'Assign Handler'
+order: 4000
+method: PUT
+url: '{{baseUrl}}/api/tickets/assign/:id'
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'

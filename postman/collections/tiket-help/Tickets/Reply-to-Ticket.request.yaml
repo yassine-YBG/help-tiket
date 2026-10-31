@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Reply to Ticket'
+order: 7000
+method: POST
+url: '{{baseUrl}}/api/tickets/reply/:id'
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'
+body:
+  type: formdata
+  content:
+    - key: message
+      type: text
+      value: 'This is a reply to the ticket'

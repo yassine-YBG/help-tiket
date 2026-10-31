@@ -1,0 +1,8 @@
+$kind: http-request
+name: 'Get Ticket By Id'
+order: 3500
+method: GET
+url: '{{baseUrl}}/api/tickets/:id'
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'

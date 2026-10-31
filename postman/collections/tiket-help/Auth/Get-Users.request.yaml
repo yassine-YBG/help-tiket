@@ -1,0 +1,5 @@
+$kind: http-request
+name: 'Get Users'
+order: 3000
+method: GET
+url: '{{baseUrl}}/api/auth/users'

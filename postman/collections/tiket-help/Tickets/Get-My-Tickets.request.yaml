@@ -1,0 +1,5 @@
+$kind: http-request
+name: 'Get My Tickets'
+order: 3000
+method: GET
+url: '{{baseUrl}}/api/tickets/my?page=1&limit=20'

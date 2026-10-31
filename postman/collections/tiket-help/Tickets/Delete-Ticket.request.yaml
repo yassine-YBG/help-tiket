@@ -1,0 +1,8 @@
+$kind: http-request
+name: 'Delete Ticket'
+order: 9000
+method: DELETE
+url: '{{baseUrl}}/api/tickets/:id'
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'

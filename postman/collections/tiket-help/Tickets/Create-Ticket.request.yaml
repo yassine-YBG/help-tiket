@@ -1,0 +1,20 @@
+$kind: http-request
+name: 'Create Ticket'
+order: 1000
+method: POST
+url: '{{baseUrl}}/api/tickets/create'
+body:
+  type: formdata
+  content:
+    - key: subject
+      type: text
+      value: 'My first ticket'
+    - key: description
+      type: text
+      value: 'This is a description of the issue'
+    - key: category
+      type: text
+      value: 'YouTube'
+    - key: priority
+      type: text
+      value: 'normal'

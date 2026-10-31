@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Update Status'
+order: 5000
+method: PUT
+url: '{{baseUrl}}/api/tickets/status/:id'
+headers:
+  - key: Content-Type
+    value: application/json
+pathVariables:
+  - key: id
+    value: 'TICKET_ID_HERE'
+body:
+  type: json
+  content: |-
+    {
+      "status": "en cours"
+    }

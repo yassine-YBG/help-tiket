@@ -1,27 +1,48 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// ✅ Verify JWT token
-exports.verifyToken = (req, res, next) => {
+// ✅ Verify JWT token AND check the account is still valid in the database.
+// This way a deactivated / deleted user, or a role change, takes effect
+// immediately instead of after the token expires (1 day).
+exports.verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
-  // Check if Bearer token exists
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
   const token = authHeader.split(' ')[1];
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // now req.user = { userId, role }
-    next(); // ✅ go to next middleware or controller
+    decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
   } catch (err) {
     return res.status(401).json({ error: 'Invalid token' });
   }
+
+  try {
+    const user = await User.findById(decoded.userId).select('role activated deleted passwordChangedAt');
+    if (!user || user.deleted || !user.activated) {
+      return res.status(401).json({ error: 'Account disabled or not found' });
+    }
+
+    // token created before the last password change -> log in again
+    if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+      return res.status(401).json({ error: 'Password changed, please log in again' });
+    }
+
+    // role comes from the database, not from the (possibly old) token
+    req.user = { userId: user._id.toString(), role: user.role };
+    next();
+  } catch (err) {
+    console.error('❌ verifyToken error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
 };
-exports.requireRole = (roles) => { 
+
+exports.requireRole = (roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied: insufficient permissions' });
     }
     next();
