@@ -11,6 +11,7 @@
 //   from / to  creation date (YYYY-MM-DD)         ?from=2026-10-01&to=2026-10-31
 //   handledBy  admins only: me | none | <userId>  ?handledBy=none
 //   createdBy  admins only: <userId>              ?createdBy=6a...
+//   awaitingSupport admins only: true            ?awaitingSupport=true  ("needs reply")
 //   archived   admins only: only | include        ?archived=only
 //              (admin list hides archived tickets unless this is given;
 //               "my tickets" always shows them — the owner never loses a ticket)
@@ -60,7 +61,7 @@ const buildTicketQuery = (query = {}, { user, onlyMine = false, defaultSort = 'n
 
   const allowed = ['status', 'priority', 'category', 'search', 'from', 'to', 'sort', 'page', 'limit'];
   const adminList = isAdmin && !onlyMine;
-  if (adminList) allowed.push('handledBy', 'createdBy', 'archived');
+  if (adminList) allowed.push('handledBy', 'createdBy', 'archived', 'awaitingSupport');
 
   // Unknown or not-allowed filter -> clear 400 instead of being silently ignored
   for (const key of Object.keys(query)) {
@@ -138,6 +139,11 @@ const buildTicketQuery = (query = {}, { user, onlyMine = false, defaultSort = 'n
   if (query.createdBy !== undefined) {
     if (!isValidId(query.createdBy)) return { error: '"createdBy" must be a user id' };
     match.createdBy = new mongoose.Types.ObjectId(query.createdBy);
+  }
+
+  if (query.awaitingSupport !== undefined) {
+    if (query.awaitingSupport !== 'true') return { error: '"awaitingSupport" can only be true' };
+    match.awaitingSupport = true;
   }
 
   if (adminList) {

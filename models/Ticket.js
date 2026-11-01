@@ -30,6 +30,14 @@ const ticketSchema = new mongoose.Schema({
   archived: { type: Boolean, default: false },
   archivedAt: { type: Date, default: null },
   archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  // Who must act next (alerts in the app):
+  // awaitingSupport  true = the owner wrote last (or a new ticket): support must answer
+  // supportUpdatedAt last time support replied or changed the status
+  // ownerSeenAt      last time the owner opened the ticket
+  //                  -> "New answer" for the owner when supportUpdatedAt > ownerSeenAt
+  awaitingSupport: { type: Boolean, default: false },
+  supportUpdatedAt: { type: Date, default: null },
+  ownerSeenAt: { type: Date, default: null },
   // set when the status becomes "résolu", cleared if the ticket is reopened
   // (used by the admin stats: average resolution time)
   resolvedAt: { type: Date, default: null },
@@ -64,6 +72,7 @@ ticketSchema.index({ deleted: 1, archived: 1, createdAt: -1 });
 ticketSchema.index({ createdBy: 1, deleted: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, createdAt: -1 });
 ticketSchema.index({ handledBy: 1, createdAt: -1 });
+ticketSchema.index({ awaitingSupport: 1, handledBy: 1 }); // "needs reply" counters
 
 // Poids de la priorité (utile pour le tri côté JS et pour le frontend)
 ticketSchema.virtual('priorityWeight').get(function () {

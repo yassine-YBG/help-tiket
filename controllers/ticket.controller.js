@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Ticket = require('../models/Ticket');
 const logActivity = require('../utils/logActivity');
 const removeUploadedFiles = require('../utils/removeUploadedFiles');
@@ -28,6 +29,11 @@ const canAccessTicket = (user, ticket) =>
 // Archive / restore: the admin handling the ticket, or any superadmin
 const canArchive = (user, ticket) =>
   user.role === 'superadmin' || (!!ticket.handledBy && ticket.handledBy.equals(user.userId));
+
+// Support answered or changed the ticket: the owner gets a "New answer" alert
+const markSupportUpdate = (ticket) => {
+  ticket.supportUpdatedAt = new Date();
+};
 
 // Bring an archived ticket back to the admin lists (no save here)
 const unarchive = (ticket) => {
@@ -110,7 +116,8 @@ exports.createTicket = async (req, res) => {
       category,
       priority: priority || 'normal',
       createdBy: req.user.userId,
-      attachments
+      attachments,
+      awaitingSupport: true // nobody has answered yet
     });
 
     await newTicket.save();
@@ -215,6 +222,7 @@ exports.assignHandler = async (req, res) => {
     // only move a new ticket to "en cours" — don't silently reopen a resolved one
     if (ticket.status === 'non résolu') {
       ticket.status = 'en cours';
+      markSupportUpdate(ticket); // the owner sees their ticket was picked up
     }
     await ticket.save();
     await logActivity({
@@ -263,12 +271,25 @@ exports.replyToTicket = async (req, res) => {
       return res.status(403).json({ error: 'Access denied: You can only reply to your own tickets' });
     }
 
+    // A resolved ticket is closed (archived ones are always resolved):
+    // nobody writes in it. The owner opens a new ticket; support can reopen it first.
+    if (ticket.status === 'résolu') {
+      removeUploadedFiles(req.files);
+      return res.status(400).json({
+        error: 'This ticket is resolved. Please open a new ticket (support can reopen it if needed).'
+      });
+    }
+
     const messageAttachments = toAttachments(req.files);
 
-    // The owner wrote again on a ticket support had closed: bring it back to the
-    // admin lists, otherwise nobody in the support team would see the message.
-    const restored = ticket.archived && ticket.createdBy.equals(req.user.userId);
-    if (restored) unarchive(ticket);
+    // Who must act next: the owner wrote -> support; support wrote -> the owner
+    const fromOwner = ticket.createdBy.equals(req.user.userId);
+    if (fromOwner) {
+      ticket.awaitingSupport = true;
+    } else {
+      ticket.awaitingSupport = false;
+      markSupportUpdate(ticket);
+    }
 
     ticket.messages.push({
       sender: req.user.userId,
@@ -280,7 +301,7 @@ exports.replyToTicket = async (req, res) => {
 
     await logActivity({
       user: req.user.userId,
-      action: `Replied to ticket with ${messageAttachments.length} attachment(s)${restored ? ' (ticket un-archived)' : ''}`,
+      action: `Replied to ticket with ${messageAttachments.length} attachment(s)`,
       target: ticket._id,
       targetModel: 'Ticket'
     });
@@ -377,6 +398,9 @@ exports.updateStatus = async (req, res) => {
     // only resolved tickets can stay archived: reopening brings it back
     const restored = ticket.archived && status !== 'résolu';
     if (restored) unarchive(ticket);
+    // a resolved ticket is closed: nobody needs to answer it any more
+    if (status === 'résolu') ticket.awaitingSupport = false;
+    if (status !== oldStatus) markSupportUpdate(ticket);
     await ticket.save();
 
     await logActivity({
@@ -401,6 +425,71 @@ exports.updateStatus = async (req, res) => {
 // GET /api/tickets/my?page=1&limit=10&status=résolu&sort=newest
 exports.getMyTickets = (req, res) =>
   listTickets(req, res, { onlyMine: true, defaultSort: 'priority' });
+
+// The owner opened their ticket: clears the "New answer" alert.
+// Separate from GET /tickets/:id so reading never changes data.
+// PUT /api/tickets/seen/:id  (owner only)
+exports.markSeen = async (req, res) => {
+  const { id } = req.params;
+  if (!isValidId(id)) return res.status(400).json({ error: 'Invalid ticket id' });
+
+  try {
+    const ticket = await findActiveTicket(id);
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+    if (!ticket.createdBy.equals(req.user.userId)) {
+      return res.status(403).json({ error: 'Only the owner of the ticket can mark it as seen' });
+    }
+
+    ticket.ownerSeenAt = new Date();
+    await ticket.save();
+    return res.status(200).json({ ownerSeenAt: ticket.ownerSeenAt });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Counters for the menu badges, in one small query.
+// admin / superadmin -> { needsReply, needsReplyMine }  tickets waiting for support
+// user               -> { newAnswers }                  own tickets support answered since last opened
+// GET /api/tickets/summary
+exports.getSummary = async (req, res) => {
+  try {
+    const visible = { deleted: { $ne: true } };
+
+    if (req.user.role === 'user') {
+      const newAnswers = await Ticket.countDocuments({
+        ...visible,
+        createdBy: req.user.userId,
+        supportUpdatedAt: { $ne: null },
+        $or: [
+          { ownerSeenAt: null },
+          { $expr: { $gt: ['$supportUpdatedAt', '$ownerSeenAt'] } },
+        ],
+      });
+      return res.status(200).json({ newAnswers });
+    }
+
+    const me = new mongoose.Types.ObjectId(req.user.userId);
+    const [result] = await Ticket.aggregate([
+      { $match: { ...visible, archived: { $ne: true }, awaitingSupport: true } },
+      {
+        $group: {
+          _id: null,
+          needsReply: { $sum: 1 },
+          needsReplyMine: { $sum: { $cond: [{ $eq: ['$handledBy', me] }, 1, 0] } },
+        },
+      },
+    ]);
+    return res.status(200).json({
+      needsReply: result ? result.needsReply : 0,
+      needsReplyMine: result ? result.needsReplyMine : 0,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
 
 // Archive a ticket = "closed by support" (admin / superadmin).
 // Hidden from the admin lists, but the owner still sees it.
