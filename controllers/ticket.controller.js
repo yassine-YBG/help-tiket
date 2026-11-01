@@ -25,6 +25,17 @@ const findActiveTicket = (id) => Ticket.findOne({ _id: id, deleted: { $ne: true 
 const canAccessTicket = (user, ticket) =>
   user.role !== 'user' || ticket.createdBy.equals(user.userId);
 
+// Archive / restore: the admin handling the ticket, or any superadmin
+const canArchive = (user, ticket) =>
+  user.role === 'superadmin' || (!!ticket.handledBy && ticket.handledBy.equals(user.userId));
+
+// Bring an archived ticket back to the admin lists (no save here)
+const unarchive = (ticket) => {
+  ticket.archived = false;
+  ticket.archivedAt = null;
+  ticket.archivedBy = null;
+};
+
 // Which user fields are shown in tickets (creator, handler, reply senders).
 // Normal users only see usernames — admins' emails stay private.
 // Admins / superadmins also see emails (to contact users).
@@ -47,11 +58,6 @@ const storedFilePath = (attachment) => {
   return safePath.startsWith(UPLOAD_BASE + path.sep) ? safePath : null;
 };
 
-// Every attachment of a ticket: the ticket's own files + the files of all replies
-const allAttachments = (ticket) => [
-  ...ticket.attachments,
-  ...ticket.messages.flatMap((m) => m.attachments || []),
-];
 
 // Turn multer files into attachment sub-documents
 const toAttachments = (files, extra = {}) =>
@@ -259,6 +265,11 @@ exports.replyToTicket = async (req, res) => {
 
     const messageAttachments = toAttachments(req.files);
 
+    // The owner wrote again on a ticket support had closed: bring it back to the
+    // admin lists, otherwise nobody in the support team would see the message.
+    const restored = ticket.archived && ticket.createdBy.equals(req.user.userId);
+    if (restored) unarchive(ticket);
+
     ticket.messages.push({
       sender: req.user.userId,
       message: typeof message === 'string' ? message.trim() : '',
@@ -269,7 +280,7 @@ exports.replyToTicket = async (req, res) => {
 
     await logActivity({
       user: req.user.userId,
-      action: `Replied to ticket with ${messageAttachments.length} attachment(s)`,
+      action: `Replied to ticket with ${messageAttachments.length} attachment(s)${restored ? ' (ticket un-archived)' : ''}`,
       target: ticket._id,
       targetModel: 'Ticket'
     });
@@ -363,18 +374,22 @@ exports.updateStatus = async (req, res) => {
     } else if (status !== 'résolu') {
       ticket.resolvedAt = null;
     }
+    // only resolved tickets can stay archived: reopening brings it back
+    const restored = ticket.archived && status !== 'résolu';
+    if (restored) unarchive(ticket);
     await ticket.save();
 
     await logActivity({
       user: req.user.userId,
-      action: `Changed status from ${oldStatus} to ${status}`,
+      action: `Changed status from ${oldStatus} to ${status}${restored ? ' (ticket un-archived)' : ''}`,
       target: ticket._id,
       targetModel: 'Ticket'
     });
 
     return res.status(200).json({
       message: 'Status updated',
-      handledBy: ticket.handledBy
+      handledBy: ticket.handledBy,
+      archived: ticket.archived
     });
   } catch (err) {
     console.error(err);
@@ -387,49 +402,71 @@ exports.updateStatus = async (req, res) => {
 exports.getMyTickets = (req, res) =>
   listTickets(req, res, { onlyMine: true, defaultSort: 'priority' });
 
-// Soft delete a ticket (admin / superadmin) — hidden but kept in the DB.
-// DELETE /api/tickets/:id                  -> files stay on disk (default)
-// DELETE /api/tickets/:id?deleteFiles=true -> also removes its files from disk
-exports.softDeleteTicket = async (req, res) => {
+// Archive a ticket = "closed by support" (admin / superadmin).
+// Hidden from the admin lists, but the owner still sees it.
+// Rules: the ticket must be resolved, and only the admin handling it or a superadmin can do it.
+// PUT /api/tickets/archive/:id
+exports.archiveTicket = async (req, res) => {
   const { id } = req.params;
   if (!isValidId(id)) return res.status(400).json({ error: 'Invalid ticket id' });
-
-  const { deleteFiles } = req.query;
-  if (deleteFiles !== undefined && deleteFiles !== 'true' && deleteFiles !== 'false') {
-    return res.status(400).json({ error: '"deleteFiles" must be true or false' });
-  }
-  const removeFiles = deleteFiles === 'true';
 
   try {
     const ticket = await findActiveTicket(id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
-    ticket.deleted = true;
-    await ticket.save();
-
-    let filesDeleted = 0;
-    if (removeFiles) {
-      for (const attachment of allAttachments(ticket)) {
-        const filePath = storedFilePath(attachment);
-        if (!filePath) continue;
-        try {
-          await fs.promises.unlink(filePath);
-          filesDeleted++;
-        } catch (err) {
-          // already gone = fine; anything else is logged but doesn't fail the delete
-          if (err.code !== 'ENOENT') console.error('❌ Failed to delete file:', filePath, err.message);
-        }
-      }
+    if (!canArchive(req.user, ticket)) {
+      return res.status(403).json({ error: 'Only the admin handling this ticket or a superadmin can archive it' });
     }
+    if (ticket.archived) return res.status(400).json({ error: 'Ticket is already archived' });
+    if (ticket.status !== 'résolu') {
+      return res.status(400).json({ error: 'Only resolved tickets can be archived' });
+    }
+
+    ticket.archived = true;
+    ticket.archivedAt = new Date();
+    ticket.archivedBy = req.user.userId;
+    await ticket.save();
 
     await logActivity({
       user: req.user.userId,
-      action: `Soft deleted ticket: ${ticket.subject}${removeFiles ? ` (${filesDeleted} file(s) removed)` : ''}`,
+      action: `Archived ticket: ${ticket.subject}`,
       target: ticket._id,
       targetModel: 'Ticket'
     });
 
-    return res.status(200).json({ message: 'Ticket soft deleted', filesDeleted });
+    return res.status(200).json({ message: 'Ticket archived', archivedAt: ticket.archivedAt });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Restore an archived ticket to the admin lists (same rule as archive)
+// PUT /api/tickets/unarchive/:id
+exports.unarchiveTicket = async (req, res) => {
+  const { id } = req.params;
+  if (!isValidId(id)) return res.status(400).json({ error: 'Invalid ticket id' });
+
+  try {
+    const ticket = await findActiveTicket(id);
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+    if (!canArchive(req.user, ticket)) {
+      return res.status(403).json({ error: 'Only the admin handling this ticket or a superadmin can restore it' });
+    }
+    if (!ticket.archived) return res.status(400).json({ error: 'Ticket is not archived' });
+
+    unarchive(ticket);
+    await ticket.save();
+
+    await logActivity({
+      user: req.user.userId,
+      action: `Restored archived ticket: ${ticket.subject}`,
+      target: ticket._id,
+      targetModel: 'Ticket'
+    });
+
+    return res.status(200).json({ message: 'Ticket restored' });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });

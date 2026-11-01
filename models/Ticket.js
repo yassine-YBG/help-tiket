@@ -25,6 +25,11 @@ const ticketSchema = new mongoose.Schema({
     ref: 'User' // we’ll populate this to get the admin name
   },
   deleted: { type: Boolean, default: false },
+  // "archived" = closed by the support team: hidden from the admin lists only.
+  // The owner still sees the ticket (with a "Closed by support" note).
+  archived: { type: Boolean, default: false },
+  archivedAt: { type: Date, default: null },
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   // set when the status becomes "résolu", cleared if the ticket is reopened
   // (used by the admin stats: average resolution time)
   resolvedAt: { type: Date, default: null },
@@ -55,7 +60,7 @@ const ticketSchema = new mongoose.Schema({
 
 // Index: make the list queries fast when there are many tickets
 // (admin list sorted by date, "my tickets", filters by status / handler)
-ticketSchema.index({ deleted: 1, createdAt: -1 });
+ticketSchema.index({ deleted: 1, archived: 1, createdAt: -1 });
 ticketSchema.index({ createdBy: 1, deleted: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, createdAt: -1 });
 ticketSchema.index({ handledBy: 1, createdAt: -1 });

@@ -36,7 +36,8 @@ answers, assigns, follows and resolves them, and admins get a statistics dashboa
 - **Admin dashboard** — statistics calculated by MongoDB aggregation (totals, priorities,
   categories, resolution time, first response time, per-admin performance, timeline).
 - **Audit trail** — every important action is written to the activity log.
-- **Soft delete** — users and tickets are hidden, never lost (users can be restored).
+- **Soft delete** — users are hidden, never lost (they can be restored).
+- **Archive ("closed by support")** — resolved tickets leave the admin lists, but the owner always keeps them.
 
 ## Getting started
 
@@ -97,7 +98,7 @@ The first run downloads a MongoDB binary once (cached afterwards).
 |---|---|
 | `auth.test.js` | register, login, tokens, `/me`, change password, admin rules, rate limit |
 | `users.test.js` | users list: pagination, search, filters, sort |
-| `tickets.test.js` | create, read, reply, files, download rights, status, priority, delete |
+| `tickets.test.js` | create, read, reply, files, download rights, status, priority, archive |
 | `ticketLists.test.js` | ticket lists: pagination, filters, search, sort, injection attempts |
 | `stats.test.js` | dashboard statistics |
 | `activityLogs.test.js` | activity log pagination and filters |
@@ -212,7 +213,8 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
 | PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself |
 | PUT | `/tickets/status/:id` | 🛠️ | body `{ "status": "résolu" }` |
-| DELETE | `/tickets/:id` | 🛠️ | Soft delete (`?deleteFiles=true` also removes its files) |
+| PUT | `/tickets/archive/:id` | handler or superadmin | Archive a **resolved** ticket (hidden from admin lists, owner still sees it) |
+| PUT | `/tickets/unarchive/:id` | handler or superadmin | Bring an archived ticket back to the admin lists |
 | GET | `/tickets/:ticketId/attachment/:type/:attachmentId/download` | owner or 🛠️ | Download a file |
 
 **POST `/tickets/create`** — `multipart/form-data`:
@@ -237,6 +239,15 @@ and/or `attachments` (at least one). The reply is added to `messages` with the s
 Assigning a resolved ticket keeps it `résolu`. Setting `résolu` saves `resolvedAt`;
 reopening clears it. Changing the status of an unassigned ticket assigns it to that admin.
 
+**Archive ("closed by support")** — there is no delete for tickets: a user never loses one.
+- `PUT /tickets/archive/:id` → `200 { "message", "archivedAt" }`. Only for a **resolved** ticket
+  (`400` otherwise, or if already archived), by **the admin handling it or a superadmin** (`403` otherwise).
+- The ticket disappears from `GET /tickets` (see `?archived=only`), but the owner still gets it in
+  `GET /tickets/my` and `GET /tickets/:id`, with `"archived": true` (the app shows "Closed by support").
+- It comes back to the admin lists by itself when **the owner replies** or an admin sets a
+  status other than `résolu`. `PUT /tickets/unarchive/:id` brings it back by hand (same rule as archive).
+- Files are never removed.
+
 **Download** — `:type` is `ticket` (files of the ticket) or `message` (files of a reply).
 The file is sent with its original name.
 
@@ -255,6 +266,7 @@ The file is sent with its original name.
 | `sort` | `?sort=priority` | `newest`, `oldest`, `priority` (default: `newest` for `/tickets`, `priority` for `/my`) |
 | `handledBy` | `?handledBy=none` | 🛠️ `/tickets` only: `me`, `none` or a user id |
 | `createdBy` | `?createdBy=<userId>` | 🛠️ `/tickets` only |
+| `archived` | `?archived=only` | 🛠️ `/tickets` only: archived tickets are hidden unless `only` or `include` |
 
 Example — open, unassigned tickets, most urgent first:
 `GET /api/tickets?status=non résolu&handledBy=none&sort=priority`

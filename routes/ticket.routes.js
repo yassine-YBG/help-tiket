@@ -68,12 +68,20 @@ router.get(
   ticketController.getTicketById
 );
 
-// NEW: soft delete a ticket (admin, superadmin)
-router.delete(
-  '/:id',
+// Archive / restore ("closed by support"): hidden from admin lists, the owner still sees it.
+// Admins only here; the controller also checks: resolved + handler or superadmin.
+router.put(
+  '/archive/:id',
   authMiddleware.verifyToken,
   authMiddleware.requireRole(ADMINS),
-  ticketController.softDeleteTicket
+  ticketController.archiveTicket
+);
+
+router.put(
+  '/unarchive/:id',
+  authMiddleware.verifyToken,
+  authMiddleware.requireRole(ADMINS),
+  ticketController.unarchiveTicket
 );
 
 module.exports = router;

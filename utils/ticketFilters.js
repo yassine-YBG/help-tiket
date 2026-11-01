@@ -11,6 +11,9 @@
 //   from / to  creation date (YYYY-MM-DD)         ?from=2026-10-01&to=2026-10-31
 //   handledBy  admins only: me | none | <userId>  ?handledBy=none
 //   createdBy  admins only: <userId>              ?createdBy=6a...
+//   archived   admins only: only | include        ?archived=only
+//              (admin list hides archived tickets unless this is given;
+//               "my tickets" always shows them — the owner never loses a ticket)
 //   sort       newest | oldest | priority         ?sort=priority
 
 const mongoose = require('mongoose');
@@ -23,6 +26,7 @@ const {
 } = require('./validation');
 
 const SORT_OPTIONS = ['newest', 'oldest', 'priority'];
+const ARCHIVED_OPTIONS = ['only', 'include'];
 const MAX_SEARCH_LENGTH = 100;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -55,7 +59,8 @@ const buildTicketQuery = (query = {}, { user, onlyMine = false, defaultSort = 'n
   const match = { deleted: { $ne: true } };
 
   const allowed = ['status', 'priority', 'category', 'search', 'from', 'to', 'sort', 'page', 'limit'];
-  if (isAdmin && !onlyMine) allowed.push('handledBy', 'createdBy');
+  const adminList = isAdmin && !onlyMine;
+  if (adminList) allowed.push('handledBy', 'createdBy', 'archived');
 
   // Unknown or not-allowed filter -> clear 400 instead of being silently ignored
   for (const key of Object.keys(query)) {
@@ -133,6 +138,16 @@ const buildTicketQuery = (query = {}, { user, onlyMine = false, defaultSort = 'n
   if (query.createdBy !== undefined) {
     if (!isValidId(query.createdBy)) return { error: '"createdBy" must be a user id' };
     match.createdBy = new mongoose.Types.ObjectId(query.createdBy);
+  }
+
+  if (adminList) {
+    if (query.archived === undefined) {
+      match.archived = { $ne: true }; // also matches old tickets without the field
+    } else if (query.archived === 'only') {
+      match.archived = true;
+    } else if (query.archived !== 'include') {
+      return { error: `Invalid "archived". Allowed: ${ARCHIVED_OPTIONS.join(', ')}` };
+    }
   }
 
   const sort = query.sort === undefined ? defaultSort : query.sort;

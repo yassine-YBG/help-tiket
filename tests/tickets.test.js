@@ -1,4 +1,4 @@
-// One ticket's full life: create, read, reply, files, status, priority, delete.
+// One ticket's full life: create, read, reply, files, status, priority, archive.
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
@@ -246,34 +246,116 @@ describe('text limits', () => {
   });
 });
 
-describe('delete ticket', () => {
-  it('user -> 403; bad deleteFiles value -> 400', async () => {
-    assert.equal((await request(app).delete(`/api/tickets/${ticketId}`).set(auth(owner))).status, 403);
-    assert.equal((await request(app).delete(`/api/tickets/${ticketId}?deleteFiles=yes`).set(auth(admin))).status, 400);
+describe('archive ("closed by support")', () => {
+  let admin2;
+  let superadmin;
+  let id;
+
+  const newTicket = async () =>
+    (await request(app).post('/api/tickets/create').set(auth(owner))
+      .send({ subject: 'Archive me', description: 'd', category: 'c' })).body.ticketId;
+  const archive = (who, ticket = id) => request(app).put(`/api/tickets/archive/${ticket}`).set(auth(who));
+  const unarchive = (who, ticket = id) => request(app).put(`/api/tickets/unarchive/${ticket}`).set(auth(who));
+  const setStatus = (who, status, ticket = id) =>
+    request(app).put(`/api/tickets/status/${ticket}`).set(auth(who)).send({ status });
+  const adminListIds = async (query = '') =>
+    (await request(app).get(`/api/tickets?limit=100${query}`).set(auth(admin))).body.tickets.map((t) => t._id);
+
+  before(async () => {
+    admin2 = await createUser({ role: 'admin', email: 'admin2@test.com' });
+    superadmin = await createUser({ role: 'superadmin', email: 'super@test.com' });
+    id = await newTicket();
   });
 
-  it('default delete keeps the files on disk', async () => {
-    const created = await request(app).post('/api/tickets/create').set(auth(owner))
-      .field('subject', 'keep').field('description', 'd').field('category', 'c')
-      .attach('attachments', Buffer.from('K'), { filename: 'k.png', contentType: 'image/png' });
+  it('the old DELETE route is gone', async () => {
+    assert.equal((await request(app).delete(`/api/tickets/${id}`).set(auth(admin))).status, 404);
+  });
+
+  it('a normal user -> 403', async () => {
+    assert.equal((await archive(owner)).status, 403);
+    assert.equal((await unarchive(owner)).status, 403);
+  });
+
+  it('not handled by anyone -> 403 for an admin', async () => {
+    const res = await archive(admin);
+    assert.equal(res.status, 403);
+  });
+
+  it('handled but not resolved -> 400', async () => {
+    await request(app).put(`/api/tickets/assign/${id}`).set(auth(admin));
+    const res = await archive(admin);
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /Only resolved tickets/);
+  });
+
+  it('resolved, but another admin (not the handler) -> 403', async () => {
+    await setStatus(admin, 'résolu');
+    assert.equal((await archive(admin2)).status, 403);
+  });
+
+  it('the handler archives it -> 200, hidden from the admin list only', async () => {
+    const res = await archive(admin);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.archivedAt);
+    assert.equal((await archive(admin)).status, 400, 'already archived');
+
+    assert.ok(!(await adminListIds()).includes(id), 'hidden by default');
+    assert.ok((await adminListIds('&archived=only')).includes(id));
+    assert.ok((await adminListIds('&archived=include')).includes(id));
+    const onlyArchived = (await request(app).get('/api/tickets?archived=only').set(auth(admin))).body.tickets;
+    assert.ok(onlyArchived.every((t) => t.archived === true), 'only archived ones');
+    assert.equal((await request(app).get('/api/tickets?archived=yes').set(auth(admin))).status, 400);
+  });
+
+  it('the owner still sees it, marked archived', async () => {
+    const one = await request(app).get(`/api/tickets/${id}`).set(auth(owner));
+    assert.equal(one.status, 200);
+    assert.equal(one.body.archived, true);
+    const mine = (await request(app).get('/api/tickets/my?limit=100').set(auth(owner))).body.tickets;
+    assert.ok(mine.some((t) => t._id === id));
+    // ...and the owner cannot use the admin filter
+    assert.equal((await request(app).get('/api/tickets/my?archived=only').set(auth(owner))).status, 400);
+  });
+
+  it('an admin reply does NOT bring it back; the owner reply does', async () => {
+    await request(app).post(`/api/tickets/reply/${id}`).set(auth(admin)).send({ message: 'closing note' });
+    assert.ok(!(await adminListIds()).includes(id));
+
+    await request(app).post(`/api/tickets/reply/${id}`).set(auth(owner)).send({ message: 'still broken' });
+    const one = (await request(app).get(`/api/tickets/${id}`).set(auth(admin))).body;
+    assert.equal(one.archived, false);
+    assert.equal(one.archivedAt, null);
+    assert.ok((await adminListIds()).includes(id));
+  });
+
+  it('reopening (status not resolved) brings it back', async () => {
+    assert.equal((await archive(admin)).status, 200);
+    const res = await setStatus(admin, 'en cours');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.archived, false);
+    assert.ok((await adminListIds()).includes(id));
+  });
+
+  it('a superadmin can archive and restore any resolved ticket', async () => {
+    await setStatus(admin, 'résolu');
+    assert.equal((await archive(superadmin)).status, 200);
+    assert.equal((await unarchive(admin2)).status, 403, 'not the handler');
+    assert.equal((await unarchive(superadmin)).status, 200);
+    assert.equal((await unarchive(superadmin)).status, 400, 'not archived any more');
+    assert.ok((await adminListIds()).includes(id));
+  });
+
+  it('bad id -> 400, unknown id -> 404', async () => {
+    assert.equal((await archive(admin, 'abc')).status, 400);
+    assert.equal((await archive(admin, '0123456789abcdef01234567')).status, 404);
+  });
+
+  it('the files stay on disk', async () => {
     const before = countUploads();
-    const res = await request(app).delete(`/api/tickets/${created.body.ticketId}`).set(auth(admin));
-    assert.equal(res.status, 200);
-    assert.equal(res.body.filesDeleted, 0);
+    await setStatus(admin, 'résolu', ticketId);
+    const handled = (await request(app).get(`/api/tickets/${ticketId}`).set(auth(admin))).body.handledBy;
+    const who = handled && handled._id === admin.id ? admin : superadmin;
+    assert.equal((await archive(who, ticketId)).status, 200);
     assert.equal(countUploads(), before);
-  });
-
-  it('deleteFiles=true removes the ticket files AND reply files', async () => {
-    const before = countUploads(); // ticket has 1 file + 1 reply file
-    const res = await request(app).delete(`/api/tickets/${ticketId}?deleteFiles=true`).set(auth(admin));
-    assert.equal(res.status, 200);
-    assert.equal(res.body.filesDeleted, 2);
-    assert.equal(countUploads(), before - 2);
-  });
-
-  it('a deleted ticket is gone from reads and lists', async () => {
-    assert.equal((await request(app).get(`/api/tickets/${ticketId}`).set(auth(owner))).status, 404);
-    const mine = (await request(app).get('/api/tickets/my').set(auth(owner))).body;
-    assert.ok(!mine.tickets.some((t) => t._id === ticketId));
   });
 });
