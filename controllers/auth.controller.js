@@ -10,12 +10,13 @@ const {
   escapeRegex,
 } = require('../utils/validation');
 const { parsePagination, buildPaginationInfo } = require('../utils/pagination');
+const { releaseOpenTickets } = require('../utils/releaseTickets');
 
 const MIN_PASSWORD_LENGTH = 6;
 const NOT_DELETED = { deleted: { $ne: true } }; // also matches old docs without the field
 
-const USER_LIST_FIELDS = 'userId username lastname email role activated createdAt';
-const USER_LIST_FILTERS = ['page', 'limit', 'search', 'role', 'activated', 'sort'];
+const USER_LIST_FIELDS = 'userId username lastname email role activated deleted createdAt';
+const USER_LIST_FILTERS = ['page', 'limit', 'search', 'role', 'activated', 'deleted', 'sort'];
 const USER_SORTS = {
   newest: { createdAt: -1, _id: -1 },
   oldest: { createdAt: 1, _id: 1 },
@@ -227,8 +228,13 @@ exports.getUsers = async (req, res) => {
     }
   }
 
-  const { search, role, activated, sort = 'newest' } = req.query;
-  const filter = { ...NOT_DELETED };
+  const { search, role, activated, deleted, sort = 'newest' } = req.query;
+
+  // ?deleted=true -> only deleted accounts (to restore them); default: only existing ones
+  if (deleted !== undefined && deleted !== 'true' && deleted !== 'false') {
+    return res.status(400).json({ error: '"deleted" must be true or false' });
+  }
+  const filter = deleted === 'true' ? { deleted: true } : { ...NOT_DELETED };
 
   if (search !== undefined) {
     const text = search.trim();
@@ -299,15 +305,17 @@ exports.toggleActivation = async (req, res) => {
 
     user.activated = activated;
     await user.save();
+    const ticketsReleased = activated ? 0 : await releaseOpenTickets(user);
     await logActivity({
       user: req.user.userId,
-      action: `User ${activated ? 'activated' : 'deactivated'}: ${user.email}`,
+      action: `User ${activated ? 'activated' : 'deactivated'}: ${user.email}${ticketsReleased ? ` (${ticketsReleased} open ticket(s) released)` : ''}`,
       target: user._id,
       targetModel: 'User'
     });
 
     return res.status(200).json({
       message: `User ${activated ? 'activated' : 'deactivated'} successfully`,
+      ticketsReleased,
     });
   } catch (err) {
     console.error(err);
@@ -333,16 +341,18 @@ exports.updateRole = async (req, res) => {
     const denied = checkCanManage(req.user, user);
     if (denied) return res.status(403).json({ error: denied });
 
+    // demoted to "user": their open tickets go back to the team
+    const ticketsReleased = role === 'user' ? await releaseOpenTickets(user) : 0;
     user.role = role;
     await user.save();
     await logActivity({
       user: req.user.userId,
-      action: `Updated user role to ${role} for ${user.email}`,
+      action: `Updated user role to ${role} for ${user.email}${ticketsReleased ? ` (${ticketsReleased} open ticket(s) released)` : ''}`,
       target: user._id,
       targetModel: 'User'
     });
 
-    return res.status(200).json({ message: 'User role updated successfully' });
+    return res.status(200).json({ message: 'User role updated successfully', ticketsReleased });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
@@ -379,14 +389,15 @@ exports.softDeleteUser = async (req, res) => {
 
     user.deleted = true;
     await user.save();
+    const ticketsReleased = await releaseOpenTickets(user);
     await logActivity({
       user: req.user.userId,
-      action: `Soft deleted user ${user.email}`,
+      action: `Soft deleted user ${user.email}${ticketsReleased ? ` (${ticketsReleased} open ticket(s) released)` : ''}`,
       target: user._id,
       targetModel: 'User'
     });
 
-    return res.status(200).json({ message: 'User deleted successfully' });
+    return res.status(200).json({ message: 'User deleted successfully', ticketsReleased });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
