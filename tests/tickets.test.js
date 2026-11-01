@@ -166,11 +166,83 @@ describe('status, priority, assign', () => {
   it('priority: owner yes, other user no, bad value 400', async () => {
     assert.equal((await request(app).put(`/api/tickets/priority/${ticketId}`).set(auth(owner)).send({ priority: 'max' })).status, 400);
     assert.equal((await request(app).put(`/api/tickets/priority/${ticketId}`).set(auth(other)).send({ priority: 'low' })).status, 403);
-    assert.equal((await request(app).put(`/api/tickets/priority/${ticketId}`).set(auth(owner)).send({ priority: 'urgent' })).status, 200);
+    assert.equal((await request(app).put(`/api/tickets/priority/${ticketId}`).set(auth(owner)).send({ priority: 'low' })).status, 200);
   });
 
   it('assign: admin only', async () => {
     assert.equal((await request(app).put(`/api/tickets/assign/${ticketId}`).set(auth(owner))).status, 403);
+  });
+});
+
+describe('urgent priority is decided by the support team', () => {
+  const create = (user, priority, withFile = false) => {
+    const req = request(app).post('/api/tickets/create').set(auth(user))
+      .field('subject', 'Urgent?').field('description', 'd').field('category', 'c').field('priority', priority);
+    return withFile ? req.attach('attachments', Buffer.from('u'), { filename: 'u.png', contentType: 'image/png' }) : req;
+  };
+  const setPriority = (user, id, priority) =>
+    request(app).put(`/api/tickets/priority/${id}`).set(auth(user)).send({ priority });
+
+  it('a user cannot create an urgent ticket (403) and the uploaded file is removed', async () => {
+    const before = countUploads();
+    const res = await create(owner, 'urgent', true);
+    await wait(200);
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /support team/);
+    assert.equal(countUploads(), before);
+  });
+
+  it('a user can create low, normal and high tickets', async () => {
+    for (const priority of ['low', 'normal', 'high']) {
+      assert.equal((await create(owner, priority)).status, 201, priority);
+    }
+  });
+
+  it('an admin can create an urgent ticket', async () => {
+    assert.equal((await create(admin, 'urgent')).status, 201);
+  });
+
+  it('a user cannot raise a ticket to urgent; support can; then the user may keep or lower it, not raise it again', async () => {
+    const id = (await create(owner, 'high')).body.ticketId;
+    assert.equal((await setPriority(owner, id, 'urgent')).status, 403);
+    assert.equal((await setPriority(admin, id, 'urgent')).status, 200);
+    assert.equal((await setPriority(owner, id, 'urgent')).status, 200, 'keeping urgent is fine');
+    assert.equal((await setPriority(owner, id, 'normal')).status, 200, 'lowering is fine');
+    assert.equal((await setPriority(owner, id, 'urgent')).status, 403, 'raising again is not');
+  });
+});
+
+describe('text limits', () => {
+  const create = (fields) => {
+    const all = { subject: 's', description: 'd', category: 'c', ...fields };
+    let req = request(app).post('/api/tickets/create').set(auth(owner));
+    for (const [k, v] of Object.entries(all)) req = req.field(k, v);
+    return req;
+  };
+
+  it('subject 150 / category 50 / description 5000 characters are accepted', async () => {
+    const res = await create({ subject: 'a'.repeat(150), category: 'b'.repeat(50), description: 'c'.repeat(5000) });
+    assert.equal(res.status, 201);
+  });
+
+  it('one character more is refused with a clear message', async () => {
+    for (const [field, max] of [['subject', 150], ['category', 50], ['description', 5000]]) {
+      const res = await create({ [field]: 'x'.repeat(max + 1) });
+      assert.equal(res.status, 400, field);
+      assert.equal(res.body.error, `"${field}" must be at most ${max} characters`);
+    }
+  });
+
+  it('spaces around the text do not count', async () => {
+    assert.equal((await create({ subject: `   ${'a'.repeat(150)}   ` })).status, 201);
+  });
+
+  it('a reply longer than 5000 characters is refused', async () => {
+    const id = (await create({})).body.ticketId;
+    const tooLong = await request(app).post(`/api/tickets/reply/${id}`).set(auth(owner)).send({ message: 'm'.repeat(5001) });
+    assert.equal(tooLong.status, 400);
+    const ok = await request(app).post(`/api/tickets/reply/${id}`).set(auth(owner)).send({ message: 'm'.repeat(5000) });
+    assert.equal(ok.status, 200);
   });
 });
 
