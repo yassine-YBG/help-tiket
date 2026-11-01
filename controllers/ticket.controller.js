@@ -6,8 +6,10 @@ const { buildTicketQuery, sortStages } = require('../utils/ticketFilters');
 const {
   TICKET_STATUSES,
   TICKET_PRIORITIES,
+  SUPPORT_ONLY_PRIORITY,
   isValidId,
   isNonEmptyString,
+  checkTextLimits,
 } = require('../utils/validation');
 const fs = require('fs');
 const path = require('path');
@@ -63,6 +65,12 @@ const toAttachments = (files, extra = {}) =>
     ...extra,
   }));
 
+// Only the support team (admin / superadmin) can set the "urgent" priority.
+// A user may keep it or lower it, but never raise a ticket to urgent.
+const URGENT_FORBIDDEN = 'Only the support team can set the urgent priority';
+const canSetPriority = (user, newPriority, currentPriority) =>
+  user.role !== 'user' || newPriority !== SUPPORT_ONLY_PRIORITY || currentPriority === SUPPORT_ONLY_PRIORITY;
+
 // ---------- controllers ----------
 
 // Create a new ticket with file attachments
@@ -73,9 +81,18 @@ exports.createTicket = async (req, res) => {
     removeUploadedFiles(req.files);
     return res.status(400).json({ error: 'subject, description and category are required' });
   }
+  const tooLong = checkTextLimits({ subject, description, category });
+  if (tooLong) {
+    removeUploadedFiles(req.files);
+    return res.status(400).json({ error: tooLong });
+  }
   if (priority !== undefined && priority !== '' && !TICKET_PRIORITIES.includes(priority)) {
     removeUploadedFiles(req.files);
     return res.status(400).json({ error: `Invalid priority. Allowed: ${TICKET_PRIORITIES.join(', ')}` });
+  }
+  if (!canSetPriority(req.user, priority, null)) {
+    removeUploadedFiles(req.files);
+    return res.status(403).json({ error: URGENT_FORBIDDEN });
   }
 
   try {
@@ -221,6 +238,11 @@ exports.replyToTicket = async (req, res) => {
   if (!isNonEmptyString(message) && !hasFiles) {
     removeUploadedFiles(req.files);
     return res.status(400).json({ error: 'A message or at least one attachment is required' });
+  }
+  const tooLong = checkTextLimits({ message });
+  if (tooLong) {
+    removeUploadedFiles(req.files);
+    return res.status(400).json({ error: tooLong });
   }
 
   try {
@@ -430,6 +452,9 @@ exports.updatePriority = async (req, res) => {
 
     if (!canAccessTicket(req.user, ticket)) {
       return res.status(403).json({ error: 'Access denied: You can only update priority of your own tickets' });
+    }
+    if (!canSetPriority(req.user, priority, ticket.priority)) {
+      return res.status(403).json({ error: URGENT_FORBIDDEN });
     }
 
     const oldPriority = ticket.priority;

@@ -209,19 +209,29 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | GET | `/tickets` | 🛠️ | All tickets (paginated) |
 | GET | `/tickets/:id` | owner or 🛠️ | One ticket with its conversation |
 | POST | `/tickets/reply/:id` | owner or 🛠️ | Reply (form-data, files allowed) |
-| PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "urgent" }` |
+| PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
 | PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself |
 | PUT | `/tickets/status/:id` | 🛠️ | body `{ "status": "résolu" }` |
 | DELETE | `/tickets/:id` | 🛠️ | Soft delete (`?deleteFiles=true` also removes its files) |
 | GET | `/tickets/:ticketId/attachment/:type/:attachmentId/download` | owner or 🛠️ | Download a file |
 
 **POST `/tickets/create`** — `multipart/form-data`:
-`subject`, `description`, `category` (required), `priority` (`low`, `normal` default, `high`, `urgent`),
+`subject` (max 150 characters), `description` (max 5000), `category` (max 50) — all required,
+`priority` (`low`, `normal` default, `high`, `urgent`),
 `attachments` (files, max 5 × 10 MB: jpg, png, gif, pdf, doc, docx, txt, mp3, wav, mp4, mov).
-→ `201 { "message", "ticketId", "attachmentsCount" }`. `400` missing field, bad priority, bad file type or size.
+→ `201 { "message", "ticketId", "attachmentsCount" }`. `400` missing or too long field, bad priority,
+bad file type or size · `403` a normal user asked for `urgent`.
 
-**POST `/tickets/reply/:id`** — `multipart/form-data` (or JSON): `message` and/or `attachments`
-(at least one). The reply is added to `messages` with the sender.
+**Priority rule — `urgent` is decided by the support team:** a normal user can choose `low`,
+`normal` or `high`. Only an admin / superadmin can set `urgent` (on creation or with
+`PUT /tickets/priority/:id`). A user may keep or lower an urgent ticket, but never raise one
+to urgent (`403`). This keeps "urgent" meaningful for sorting and statistics.
+
+**Text limits** (counted after removing spaces at both ends): subject 150, category 50,
+description 5000, reply message 5000 characters — longer values get `400` with the field name.
+
+**POST `/tickets/reply/:id`** — `multipart/form-data` (or JSON): `message` (max 5000 characters)
+and/or `attachments` (at least one). The reply is added to `messages` with the sender.
 
 **Status flow:** `non résolu` → `en cours` (when an admin assigns or changes it) → `résolu`.
 Assigning a resolved ticket keeps it `résolu`. Setting `résolu` saves `resolvedAt`;
