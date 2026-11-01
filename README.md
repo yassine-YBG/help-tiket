@@ -212,8 +212,8 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | GET | `/tickets/:id` | owner or 🛠️ | One ticket with its conversation |
 | POST | `/tickets/reply/:id` | owner or 🛠️ handler | Reply (form-data, files allowed) — not on a resolved ticket |
 | PUT | `/tickets/seen/:id` | owner | The owner opened the ticket (clears "New answer") |
-| PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
-| PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself |
+| PUT | `/tickets/priority/:id` | owner or 🛠️ handler | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
+| PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself (admins cannot take a superadmin's ticket) |
 | PUT | `/tickets/status/:id` | 🛠️ handler | body `{ "status": "résolu" }` — only the admin handling the ticket |
 | PUT | `/tickets/archive/:id` | handler or superadmin | Archive a **resolved** ticket (hidden from admin lists, owner still sees it) |
 | PUT | `/tickets/unarchive/:id` | handler or superadmin | Bring an archived ticket back to the admin lists |
@@ -258,6 +258,12 @@ reopening clears it.
 status **only when it is assigned to them** — `PUT /tickets/assign/:id` first (it also takes over a
 ticket from another admin). Otherwise `403` "Assign this ticket to yourself…" or
 "This ticket is handled by <name>. Take it over…". The owner can always reply to their open ticket.
+The same rule applies to **priority** (`PUT /tickets/priority/:id`): support changes it only on a
+ticket assigned to them; the owner keeps their own rules (never raise to `urgent`).
+
+**A ticket held by a superadmin stays with them:** an admin calling `PUT /tickets/assign/:id` on it
+gets `403` "…handled by <name> (superadmin). Admins cannot take it over". Another superadmin can.
+Support sees the handler's `role` in tickets (users never see roles or emails).
 
 **Archive ("closed by support")** — there is no delete for tickets: a user never loses one.
 - `PUT /tickets/archive/:id` → `200 { "message", "archivedAt" }`. Only for a **resolved** ticket

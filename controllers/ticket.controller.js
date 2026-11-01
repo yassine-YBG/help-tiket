@@ -57,8 +57,9 @@ const unarchive = (ticket) => {
 // Which user fields are shown in tickets (creator, handler, reply senders).
 // Normal users only see usernames — admins' emails stay private.
 // Admins / superadmins also see emails (to contact users).
+// Support also sees the role (to know which tickets a superadmin holds).
 const ticketPopulate = (user) => {
-  const select = user.role === 'user' ? 'username' : 'username email';
+  const select = user.role === 'user' ? 'username' : 'username email role';
   return [
     { path: 'createdBy', select },
     { path: 'handledBy', select },
@@ -229,6 +230,16 @@ exports.assignHandler = async (req, res) => {
   try {
     const ticket = await findActiveTicket(id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+    // A ticket held by a superadmin stays with them: only another superadmin can take it
+    if (ticket.handledBy && !ticket.handledBy.equals(req.user.userId) && req.user.role !== 'superadmin') {
+      const holder = await User.findById(ticket.handledBy).select('username role').lean();
+      if (holder && holder.role === 'superadmin') {
+        return res.status(403).json({
+          error: `This ticket is handled by ${holder.username} (superadmin). Admins cannot take it over`
+        });
+      }
+    }
 
     ticket.handledBy = req.user.userId; // the admin handling it
     // only move a new ticket to "en cours" — don't silently reopen a resolved one
@@ -602,6 +613,11 @@ exports.updatePriority = async (req, res) => {
     }
     if (!canSetPriority(req.user, priority, ticket.priority)) {
       return res.status(403).json({ error: URGENT_FORBIDDEN });
+    }
+    // Support changes the priority only on a ticket assigned to them (the owner always can)
+    if (!ticket.createdBy.equals(req.user.userId)) {
+      const notHandler = await handlerError(req.user, ticket, 'change its priority');
+      if (notHandler) return res.status(403).json({ error: notHandler });
     }
 
     const oldPriority = ticket.priority;
