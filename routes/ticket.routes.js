@@ -20,6 +20,13 @@ router.get(
   ticketController.getAllTickets
 );
 
+// Counters for the menu badges (keep before '/:id')
+router.get(
+  '/summary',
+  authMiddleware.verifyToken,
+  ticketController.getSummary
+);
+
 router.get(
   '/my',
   authMiddleware.verifyToken,
@@ -66,6 +73,13 @@ router.get(
   '/:id',
   authMiddleware.verifyToken,
   ticketController.getTicketById
+);
+
+// Owner opened the ticket: clears the "New answer" alert
+router.put(
+  '/seen/:id',
+  authMiddleware.verifyToken,
+  ticketController.markSeen
 );
 
 // Archive / restore ("closed by support"): hidden from admin lists, the owner still sees it.

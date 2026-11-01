@@ -317,19 +317,21 @@ describe('archive ("closed by support")', () => {
     assert.equal((await request(app).get('/api/tickets/my?archived=only').set(auth(owner))).status, 400);
   });
 
-  it('an admin reply does NOT bring it back; the owner reply does', async () => {
-    await request(app).post(`/api/tickets/reply/${id}`).set(auth(admin)).send({ message: 'closing note' });
-    assert.ok(!(await adminListIds()).includes(id));
-
-    await request(app).post(`/api/tickets/reply/${id}`).set(auth(owner)).send({ message: 'still broken' });
-    const one = (await request(app).get(`/api/tickets/${id}`).set(auth(admin))).body;
-    assert.equal(one.archived, false);
-    assert.equal(one.archivedAt, null);
-    assert.ok((await adminListIds()).includes(id));
+  it('nobody can write in an archived (resolved) ticket, and uploaded files are removed', async () => {
+    const before = countUploads();
+    const byOwner = await request(app).post(`/api/tickets/reply/${id}`).set(auth(owner))
+      .field('message', 'still broken')
+      .attach('attachments', Buffer.from('X'), { filename: 'x.png', contentType: 'image/png' });
+    assert.equal(byOwner.status, 400);
+    assert.match(byOwner.body.error, /open a new ticket/);
+    await wait(200);
+    assert.equal(countUploads(), before);
+    assert.equal((await request(app).post(`/api/tickets/reply/${id}`).set(auth(admin)).send({ message: 'x' })).status, 400);
+    assert.ok(!(await adminListIds()).includes(id), 'still archived');
   });
 
   it('reopening (status not resolved) brings it back', async () => {
-    assert.equal((await archive(admin)).status, 200);
+    // still archived from the tests above
     const res = await setStatus(admin, 'en cours');
     assert.equal(res.status, 200);
     assert.equal(res.body.archived, false);
@@ -359,3 +361,96 @@ describe('archive ("closed by support")', () => {
     assert.equal(countUploads(), before);
   });
 });
+
+describe('who must act next (alerts)', () => {
+  let id;
+  let owner2; // a fresh owner so the counters only see this test's tickets
+  const get = async (who = admin) => (await request(app).get(`/api/tickets/${id}`).set(auth(who))).body;
+  const reply = (who, message = 'hello') => request(app).post(`/api/tickets/reply/${id}`).set(auth(who)).send({ message });
+  const summary = async (who) => (await request(app).get('/api/tickets/summary').set(auth(who))).body;
+  const seen = (who) => request(app).put(`/api/tickets/seen/${id}`).set(auth(who));
+
+  before(async () => {
+    owner2 = await createUser({ email: 'alerts-owner@test.com' });
+    id = (await request(app).post('/api/tickets/create').set(auth(owner2))
+      .send({ subject: 'Alerts', description: 'd', category: 'c' })).body.ticketId;
+  });
+
+  it('a new ticket waits for support; the owner has no new answer yet', async () => {
+    const t = await get();
+    assert.equal(t.awaitingSupport, true);
+    assert.equal(t.supportUpdatedAt, null);
+    assert.deepEqual(await summary(owner2), { newAnswers: 0 });
+    const s = await summary(admin);
+    assert.ok(s.needsReply >= 1);
+    assert.equal(typeof s.needsReplyMine, 'number');
+  });
+
+  it('"needs reply" filter on the admin list (not for users)', async () => {
+    const ids = (await request(app).get('/api/tickets?awaitingSupport=true&limit=100').set(auth(admin))).body.tickets.map((t) => t._id);
+    assert.ok(ids.includes(id));
+    assert.equal((await request(app).get('/api/tickets?awaitingSupport=false').set(auth(admin))).status, 400);
+    assert.equal((await request(app).get('/api/tickets/my?awaitingSupport=true').set(auth(owner2))).status, 400);
+  });
+
+  it('support assigns -> the owner gets a new answer; mine counter counts it', async () => {
+    const before = (await summary(admin)).needsReplyMine;
+    await request(app).put(`/api/tickets/assign/${id}`).set(auth(admin));
+    assert.equal((await summary(admin)).needsReplyMine, before + 1, 'still needs a reply, now mine');
+    assert.deepEqual(await summary(owner2), { newAnswers: 1 });
+  });
+
+  it('support replies -> no longer waiting for support', async () => {
+    assert.equal((await reply(admin, 'Try again please')).status, 200);
+    const t = await get();
+    assert.equal(t.awaitingSupport, false);
+    assert.ok(t.supportUpdatedAt);
+    const ids = (await request(app).get('/api/tickets?awaitingSupport=true&limit=100').set(auth(admin))).body.tickets.map((x) => x._id);
+    assert.ok(!ids.includes(id));
+  });
+
+  it('the owner opens it -> the new answer is gone; only the owner can mark it seen', async () => {
+    assert.equal((await seen(admin)).status, 403);
+    assert.equal((await seen(other)).status, 403);
+    assert.equal((await request(app).put('/api/tickets/seen/abc').set(auth(owner2))).status, 400);
+    const res = await seen(owner2);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.ownerSeenAt);
+    assert.deepEqual(await summary(owner2), { newAnswers: 0 });
+  });
+
+  it('reading the ticket (GET) does not change anything', async () => {
+    const before = await get(owner2);
+    await get(owner2);
+    assert.equal((await get(owner2)).ownerSeenAt, before.ownerSeenAt);
+  });
+
+  it('the owner replies -> waits for support again', async () => {
+    await wait(5);
+    assert.equal((await reply(owner2, 'Still broken')).status, 200);
+    assert.equal((await get()).awaitingSupport, true);
+    assert.deepEqual(await summary(owner2), { newAnswers: 0 }, 'own message is not a new answer');
+  });
+
+  it('resolving closes it: nobody waits, nobody can write', async () => {
+    await wait(5);
+    await request(app).put(`/api/tickets/status/${id}`).set(auth(admin)).send({ status: 'résolu' });
+    const t = await get();
+    assert.equal(t.awaitingSupport, false);
+    assert.deepEqual(await summary(owner2), { newAnswers: 1 }, 'the owner is told it was resolved');
+    assert.equal((await reply(owner2)).status, 400);
+    assert.equal((await reply(admin)).status, 400);
+  });
+
+  it('support reopens it -> everyone can write again', async () => {
+    await request(app).put(`/api/tickets/status/${id}`).set(auth(admin)).send({ status: 'en cours' });
+    assert.equal((await reply(owner2, 'thanks for reopening')).status, 200);
+    assert.equal((await get()).awaitingSupport, true);
+  });
+
+  it('a normal user cannot read the admin counters', async () => {
+    const s = await summary(owner2);
+    assert.equal(s.needsReply, undefined);
+  });
+});
+

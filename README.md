@@ -208,8 +208,10 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | POST | `/tickets/create` | 👤 | Create a ticket (form-data, files allowed) |
 | GET | `/tickets/my` | 👤 | My tickets (paginated) |
 | GET | `/tickets` | 🛠️ | All tickets (paginated) |
+| GET | `/tickets/summary` | 👤 | Counters for the menu badges (see **Alerts**) |
 | GET | `/tickets/:id` | owner or 🛠️ | One ticket with its conversation |
-| POST | `/tickets/reply/:id` | owner or 🛠️ | Reply (form-data, files allowed) |
+| POST | `/tickets/reply/:id` | owner or 🛠️ | Reply (form-data, files allowed) — not on a resolved ticket |
+| PUT | `/tickets/seen/:id` | owner | The owner opened the ticket (clears "New answer") |
 | PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
 | PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself |
 | PUT | `/tickets/status/:id` | 🛠️ | body `{ "status": "résolu" }` |
@@ -234,6 +236,19 @@ description 5000, reply message 5000 characters — longer values get `400` with
 
 **POST `/tickets/reply/:id`** — `multipart/form-data` (or JSON): `message` (max 5000 characters)
 and/or `attachments` (at least one). The reply is added to `messages` with the sender.
+**A resolved ticket is closed:** replying to it gives `400` for everyone (owner and support).
+The owner opens a new ticket; support can set the status back to `en cours` to reopen it first.
+
+**Alerts — who must act next** (shown as badges and menu counters in the app):
+- `awaitingSupport: true` — the owner wrote last (or nobody answered a new ticket yet): support must
+  reply. Becomes `false` when support replies or the ticket is resolved. Admin filter:
+  `GET /tickets?awaitingSupport=true` ("Needs reply").
+- `supportUpdatedAt` — last time support replied or changed the status. `ownerSeenAt` — last time the
+  owner opened the ticket (`PUT /tickets/seen/:id`, the owner only; a simple GET never changes data).
+  The owner has a **new answer** when `supportUpdatedAt` is after `ownerSeenAt`.
+- `GET /tickets/summary` → admins: `{ "needsReply", "needsReplyMine" }` (not archived, waiting for
+  support; `Mine` = handled by me) · users: `{ "newAnswers" }`.
+- Tickets created before this feature have no alert (fields empty).
 
 **Status flow:** `non résolu` → `en cours` (when an admin assigns or changes it) → `résolu`.
 Assigning a resolved ticket keeps it `résolu`. Setting `résolu` saves `resolvedAt`;
@@ -244,8 +259,8 @@ reopening clears it. Changing the status of an unassigned ticket assigns it to t
   (`400` otherwise, or if already archived), by **the admin handling it or a superadmin** (`403` otherwise).
 - The ticket disappears from `GET /tickets` (see `?archived=only`), but the owner still gets it in
   `GET /tickets/my` and `GET /tickets/:id`, with `"archived": true` (the app shows "Closed by support").
-- It comes back to the admin lists by itself when **the owner replies** or an admin sets a
-  status other than `résolu`. `PUT /tickets/unarchive/:id` brings it back by hand (same rule as archive).
+- Nobody can write in it (it is resolved). It comes back to the admin lists when an admin sets a
+  status other than `résolu`, or with `PUT /tickets/unarchive/:id` (same rule as archive).
 - Files are never removed.
 
 **Download** — `:type` is `ticket` (files of the ticket) or `message` (files of a reply).
@@ -267,6 +282,7 @@ The file is sent with its original name.
 | `handledBy` | `?handledBy=none` | 🛠️ `/tickets` only: `me`, `none` or a user id |
 | `createdBy` | `?createdBy=<userId>` | 🛠️ `/tickets` only |
 | `archived` | `?archived=only` | 🛠️ `/tickets` only: archived tickets are hidden unless `only` or `include` |
+| `awaitingSupport` | `?awaitingSupport=true` | 🛠️ `/tickets` only: tickets waiting for a support reply |
 
 Example — open, unassigned tickets, most urgent first:
 `GET /api/tickets?status=non résolu&handledBy=none&sort=priority`
