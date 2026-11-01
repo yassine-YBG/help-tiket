@@ -250,6 +250,7 @@ describe('urgent priority is decided by the support team', () => {
   it('a user cannot raise a ticket to urgent; support can; then the user may keep or lower it, not raise it again', async () => {
     const id = (await create(owner, 'high')).body.ticketId;
     assert.equal((await setPriority(owner, id, 'urgent')).status, 403);
+    await request(app).put(`/api/tickets/assign/${id}`).set(auth(admin));
     assert.equal((await setPriority(admin, id, 'urgent')).status, 200);
     assert.equal((await setPriority(owner, id, 'urgent')).status, 200, 'keeping urgent is fine');
     assert.equal((await setPriority(owner, id, 'normal')).status, 200, 'lowering is fine');
@@ -498,3 +499,68 @@ describe('who must act next (alerts)', () => {
   });
 });
 
+describe('priority by support + tickets held by a superadmin', () => {
+  let malek;
+  let rami;
+  let sara;
+  let other2;
+  const newTicket = async () =>
+    (await request(app).post('/api/tickets/create').set(auth(other2))
+      .send({ subject: 'Lock', description: 'd', category: 'c' })).body.ticketId;
+  const assign = (who, id) => request(app).put(`/api/tickets/assign/${id}`).set(auth(who));
+  const priority = (who, id, p) => request(app).put(`/api/tickets/priority/${id}`).set(auth(who)).send({ priority: p });
+
+  before(async () => {
+    malek = await createUser({ role: 'admin', email: 'lock-malek@test.com', username: 'Malek' });
+    rami = await createUser({ role: 'admin', email: 'lock-rami@test.com', username: 'Rami' });
+    sara = await createUser({ role: 'superadmin', email: 'lock-sara@test.com', username: 'Sara' });
+    other2 = await createUser({ email: 'lock-owner@test.com' });
+  });
+
+  it('support changes the priority only on a ticket assigned to them', async () => {
+    const id = await newTicket();
+    let res = await priority(malek, id, 'high');
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /Assign this ticket to yourself before you change its priority/);
+
+    await assign(rami, id);
+    res = await priority(malek, id, 'high');
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /handled by Rami/);
+
+    assert.equal((await priority(rami, id, 'urgent')).status, 200);
+    assert.equal((await priority(other2, id, 'low')).status, 200, 'the owner still can (lowering)');
+  });
+
+  it('an admin cannot take a ticket held by a superadmin', async () => {
+    const id = await newTicket();
+    assert.equal((await assign(sara, id)).status, 200);
+    const res = await assign(malek, id);
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /handled by Sara \(superadmin\)\. Admins cannot take it over/);
+    const t = (await request(app).get(`/api/tickets/${id}`).set(auth(malek))).body;
+    assert.equal(t.handledBy.username, 'Sara', 'still Sara');
+    assert.equal(t.handledBy.role, 'superadmin', 'support sees the role');
+  });
+
+  it('another superadmin can take it; a superadmin can take any admin ticket', async () => {
+    const boss2 = await createUser({ role: 'superadmin', email: 'lock-boss2@test.com' });
+    const id = await newTicket();
+    await assign(sara, id);
+    assert.equal((await assign(boss2, id)).status, 200);
+
+    const id2 = await newTicket();
+    await assign(malek, id2);
+    assert.equal((await assign(sara, id2)).status, 200);
+    // and from there Malek cannot take it back
+    assert.equal((await assign(malek, id2)).status, 403);
+  });
+
+  it('a user never sees roles or emails of support', async () => {
+    const id = await newTicket();
+    await assign(sara, id);
+    const t = (await request(app).get(`/api/tickets/${id}`).set(auth(other2))).body;
+    assert.equal(t.handledBy.role, undefined);
+    assert.equal(t.handledBy.email, undefined);
+  });
+});
