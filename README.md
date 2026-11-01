@@ -210,11 +210,11 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | GET | `/tickets` | 🛠️ | All tickets (paginated) |
 | GET | `/tickets/summary` | 👤 | Counters for the menu badges (see **Alerts**) |
 | GET | `/tickets/:id` | owner or 🛠️ | One ticket with its conversation |
-| POST | `/tickets/reply/:id` | owner or 🛠️ | Reply (form-data, files allowed) — not on a resolved ticket |
+| POST | `/tickets/reply/:id` | owner or 🛠️ handler | Reply (form-data, files allowed) — not on a resolved ticket |
 | PUT | `/tickets/seen/:id` | owner | The owner opened the ticket (clears "New answer") |
 | PUT | `/tickets/priority/:id` | owner or 🛠️ | body `{ "priority": "high" }` (`urgent`: 🛠️ only) |
 | PUT | `/tickets/assign/:id` | 🛠️ | Assign the ticket to myself |
-| PUT | `/tickets/status/:id` | 🛠️ | body `{ "status": "résolu" }` |
+| PUT | `/tickets/status/:id` | 🛠️ handler | body `{ "status": "résolu" }` — only the admin handling the ticket |
 | PUT | `/tickets/archive/:id` | handler or superadmin | Archive a **resolved** ticket (hidden from admin lists, owner still sees it) |
 | PUT | `/tickets/unarchive/:id` | handler or superadmin | Bring an archived ticket back to the admin lists |
 | GET | `/tickets/:ticketId/attachment/:type/:attachmentId/download` | owner or 🛠️ | Download a file |
@@ -252,7 +252,12 @@ The owner opens a new ticket; support can set the status back to `en cours` to r
 
 **Status flow:** `non résolu` → `en cours` (when an admin assigns or changes it) → `résolu`.
 Assigning a resolved ticket keeps it `résolu`. Setting `résolu` saves `resolvedAt`;
-reopening clears it. Changing the status of an unassigned ticket assigns it to that admin.
+reopening clears it.
+
+**One handler per ticket:** support (admin **and** superadmin) can reply to a ticket or change its
+status **only when it is assigned to them** — `PUT /tickets/assign/:id` first (it also takes over a
+ticket from another admin). Otherwise `403` "Assign this ticket to yourself…" or
+"This ticket is handled by <name>. Take it over…". The owner can always reply to their open ticket.
 
 **Archive ("closed by support")** — there is no delete for tickets: a user never loses one.
 - `PUT /tickets/archive/:id` → `200 { "message", "archivedAt" }`. Only for a **resolved** ticket

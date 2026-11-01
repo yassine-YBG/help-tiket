@@ -112,6 +112,33 @@ describe('reply', () => {
     assert.equal(res.status, 400);
   });
 
+  it('an admin must be assigned before replying (no auto-assign), and sees who handles it', async () => {
+    const before = countUploads();
+    let res = await request(app).post(`/api/tickets/reply/${ticketId}`).set(auth(admin))
+      .field('message', 'not mine yet')
+      .attach('attachments', Buffer.from('x'), { filename: 'n.png', contentType: 'image/png' });
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /Assign this ticket to yourself before you reply/);
+    await wait(200);
+    assert.equal(countUploads(), before, 'uploaded file removed');
+
+    // another admin takes it: Malek cannot reply any more
+    const admin2 = await createUser({ role: 'admin', email: 'reply-admin2@test.com', username: 'Sara' });
+    await request(app).put(`/api/tickets/assign/${ticketId}`).set(auth(admin2));
+    res = await request(app).post(`/api/tickets/reply/${ticketId}`).set(auth(admin)).send({ message: 'x' });
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /handled by Sara\. Take it over/);
+
+    // a superadmin follows the same rule
+    const boss = await createUser({ role: 'superadmin', email: 'reply-super@test.com' });
+    assert.equal((await request(app).post(`/api/tickets/reply/${ticketId}`).set(auth(boss)).send({ message: 'x' })).status, 403);
+
+    // take it back -> allowed
+    await request(app).put(`/api/tickets/assign/${ticketId}`).set(auth(admin));
+    const t = (await request(app).get(`/api/tickets/${ticketId}`).set(auth(admin))).body;
+    assert.equal(t.messages.length, 0, 'nothing was saved by the refused replies');
+  });
+
   it('admin replies with a file, owner replies, owner downloads the reply file', async () => {
     let res = await request(app).post(`/api/tickets/reply/${ticketId}`).set(auth(admin))
       .field('message', 'Try again please')
@@ -143,6 +170,24 @@ describe('emails are hidden from normal users', () => {
 });
 
 describe('status, priority, assign', () => {
+  it('status: only the admin handling the ticket (no auto-assign any more)', async () => {
+    const fresh = (await request(app).post('/api/tickets/create').set(auth(owner))
+      .send({ subject: 'Status rule', description: 'd', category: 'c' })).body.ticketId;
+    let res = await request(app).put(`/api/tickets/status/${fresh}`).set(auth(admin)).send({ status: 'en cours' });
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /Assign this ticket to yourself before you change its status/);
+    const t = (await request(app).get(`/api/tickets/${fresh}`).set(auth(admin))).body;
+    assert.equal(t.handledBy, undefined, 'not auto-assigned');
+    assert.equal(t.status, 'non résolu');
+
+    const admin3 = await createUser({ role: 'admin', email: 'status-admin3@test.com', username: 'Rami' });
+    await request(app).put(`/api/tickets/assign/${fresh}`).set(auth(admin3));
+    res = await request(app).put(`/api/tickets/status/${fresh}`).set(auth(admin)).send({ status: 'résolu' });
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /handled by Rami/);
+    assert.equal((await request(app).put(`/api/tickets/status/${fresh}`).set(auth(admin3)).send({ status: 'résolu' })).status, 200);
+  });
+
   it('status: validation and permissions', async () => {
     assert.equal((await request(app).put(`/api/tickets/status/${ticketId}`).set(auth(admin)).send({ status: 'closed' })).status, 400);
     assert.equal((await request(app).put('/api/tickets/status/abc').set(auth(admin)).send({ status: 'résolu' })).status, 400);
@@ -153,7 +198,7 @@ describe('status, priority, assign', () => {
     assert.equal((await request(app).put(`/api/tickets/status/${ticketId}`).set(auth(admin)).send({ status: 'résolu' })).status, 200);
     let t = (await request(app).get(`/api/tickets/${ticketId}`).set(auth(admin))).body;
     assert.ok(t.resolvedAt);
-    assert.equal(t.handledBy.email, 'admin@test.com', 'auto-assigned');
+    assert.equal(t.handledBy.email, 'admin@test.com');
 
     const assign = await request(app).put(`/api/tickets/assign/${ticketId}`).set(auth(admin));
     assert.equal(assign.body.status, 'résolu');
@@ -354,10 +399,9 @@ describe('archive ("closed by support")', () => {
 
   it('the files stay on disk', async () => {
     const before = countUploads();
-    await setStatus(admin, 'résolu', ticketId);
-    const handled = (await request(app).get(`/api/tickets/${ticketId}`).set(auth(admin))).body.handledBy;
-    const who = handled && handled._id === admin.id ? admin : superadmin;
-    assert.equal((await archive(who, ticketId)).status, 200);
+    await request(app).put(`/api/tickets/assign/${ticketId}`).set(auth(admin));
+    assert.equal((await setStatus(admin, 'résolu', ticketId)).status, 200);
+    assert.equal((await archive(admin, ticketId)).status, 200);
     assert.equal(countUploads(), before);
   });
 });

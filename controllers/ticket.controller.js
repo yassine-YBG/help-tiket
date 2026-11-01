@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Ticket = require('../models/Ticket');
+const User = require('../models/User');
 const logActivity = require('../utils/logActivity');
 const removeUploadedFiles = require('../utils/removeUploadedFiles');
 const { parsePagination, buildPaginationInfo } = require('../utils/pagination');
@@ -25,6 +26,17 @@ const findActiveTicket = (id) => Ticket.findOne({ _id: id, deleted: { $ne: true 
 // admin / superadmin: every ticket. user: only their own tickets.
 const canAccessTicket = (user, ticket) =>
   user.role !== 'user' || ticket.createdBy.equals(user.userId);
+
+// Support acts on a ticket (reply, status) only when it is assigned to them:
+// one admin per conversation, so two admins never answer the same user.
+// Same rule for admins and superadmins. Returns an error message, or null when allowed.
+const handlerError = async (user, ticket, action) => {
+  if (!ticket.handledBy) return `Assign this ticket to yourself before you ${action}`;
+  if (ticket.handledBy.equals(user.userId)) return null;
+  const handler = await User.findById(ticket.handledBy).select('username').lean();
+  const name = handler ? handler.username : 'another admin';
+  return `This ticket is handled by ${name}. Take it over before you ${action}`;
+};
 
 // Archive / restore: the admin handling the ticket, or any superadmin
 const canArchive = (user, ticket) =>
@@ -280,10 +292,20 @@ exports.replyToTicket = async (req, res) => {
       });
     }
 
-    const messageAttachments = toAttachments(req.files);
-
     // Who must act next: the owner wrote -> support; support wrote -> the owner
     const fromOwner = ticket.createdBy.equals(req.user.userId);
+
+    // Support replies only on a ticket assigned to them
+    if (!fromOwner) {
+      const notHandler = await handlerError(req.user, ticket, 'reply');
+      if (notHandler) {
+        removeUploadedFiles(req.files);
+        return res.status(403).json({ error: notHandler });
+      }
+    }
+
+    const messageAttachments = toAttachments(req.files);
+
     if (fromOwner) {
       ticket.awaitingSupport = true;
     } else {
@@ -381,10 +403,9 @@ exports.updateStatus = async (req, res) => {
     const ticket = await findActiveTicket(id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
-    // Si l'admin change le statut et n'est pas encore assigné, l'assigner automatiquement
-    if (!ticket.handledBy) {
-      ticket.handledBy = req.user.userId;
-    }
+    // Only the admin handling the ticket changes its status (assign / take over first)
+    const notHandler = await handlerError(req.user, ticket, 'change its status');
+    if (notHandler) return res.status(403).json({ error: notHandler });
 
     const oldStatus = ticket.status;
     ticket.status = status;
