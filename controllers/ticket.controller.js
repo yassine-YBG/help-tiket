@@ -482,7 +482,7 @@ exports.markSeen = async (req, res) => {
 };
 
 // Counters for the menu badges, in one small query.
-// admin / superadmin -> { needsReply, needsReplyMine }  tickets waiting for support
+// admin / superadmin -> { needsReply, needsReplyMine, pendingUsers }  tickets waiting for support + accounts to activate
 // user               -> { newAnswers }                  own tickets support answered since last opened
 // GET /api/tickets/summary
 exports.getSummary = async (req, res) => {
@@ -513,9 +513,13 @@ exports.getSummary = async (req, res) => {
         },
       },
     ]);
+    // new registrations waiting for activation (menu counter "Pending accounts")
+    const pendingUsers = await User.countDocuments({ activated: false, deleted: { $ne: true } });
+
     return res.status(200).json({
       needsReply: result ? result.needsReply : 0,
       needsReplyMine: result ? result.needsReplyMine : 0,
+      pendingUsers,
     });
   } catch (err) {
     console.error(err);

@@ -206,6 +206,21 @@ exports.getStats = async (req, res) => {
 
     const u = userStats[0] || { total: 0, pendingActivation: 0, users: 0, admins: 0, superadmins: 0 };
 
+    // Team performance (each admin's numbers) is for the superadmin only
+    const byAdmin = req.user.role === 'superadmin'
+      ? t.byAdmin.map((a) => {
+          const admin = adminById.get(a._id.toString());
+          return {
+            adminId: a._id,
+            username: admin ? admin.username : '(deleted user)',
+            email: admin ? admin.email : null,
+            handled: a.handled,
+            resolved: a.resolved,
+            averageResolutionHours: msToHours(a.avgResolutionMs),
+          };
+        })
+      : undefined;
+
     return res.status(200).json({
       range: {
         from: range.createdAt.$gte || null,
@@ -227,17 +242,7 @@ exports.getStats = async (req, res) => {
       byCategory: t.byCategory.map((c) => ({ category: c._id, count: c.count })),
       resolutionTime: durationStats(t.resolution[0]),
       firstResponseTime: durationStats(t.firstResponse[0]),
-      byAdmin: t.byAdmin.map((a) => {
-        const admin = adminById.get(a._id.toString());
-        return {
-          adminId: a._id,
-          username: admin ? admin.username : '(deleted user)',
-          email: admin ? admin.email : null,
-          handled: a.handled,
-          resolved: a.resolved,
-          averageResolutionHours: msToHours(a.avgResolutionMs),
-        };
-      }),
+      ...(byAdmin ? { byAdmin } : {}),
       timeline: t.timeline.map((p) => ({ period: p._id, created: p.created, resolved: p.resolved })),
       users: {
         total: u.total,

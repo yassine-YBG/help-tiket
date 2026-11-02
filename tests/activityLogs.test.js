@@ -51,3 +51,38 @@ describe('GET /api/activity-logs', () => {
     assert.equal((await logs('', user)).status, 403);
   });
 });
+
+describe('what an admin may see', () => {
+  let boss;
+  before(async () => {
+    boss = await createUser({ role: 'superadmin' });
+    // a superadmin action: change the role of a user
+    const target = await createUser();
+    await request(app).put(`/api/auth/users/${target.id}/role`).set('Authorization', `Bearer ${boss.token}`).send({ role: 'admin' });
+  });
+
+  it('admins never see superadmin actions; the superadmin sees everything', async () => {
+    const forAdmin = (await logs('?limit=100')).body.logs;
+    assert.ok(!forAdmin.some((l) => l.user && l.user.role === 'superadmin'));
+    const forBoss = (await logs('?limit=100', boss)).body.logs;
+    assert.ok(forBoss.some((l) => l.user && l.user.role === 'superadmin'));
+    assert.equal(forBoss.length, forAdmin.length + 1);
+  });
+
+  it('asking for the superadmin by id gives nothing to an admin', async () => {
+    assert.equal((await logs(`?user=${boss.id}`)).body.pagination.total, 0);
+    assert.equal((await logs(`?user=${boss.id}`, boss)).body.pagination.total, 1);
+  });
+});
+
+describe('date filter', () => {
+  it('from / to on the action date; bad dates -> 400', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    assert.ok((await logs(`?from=${today}&to=${today}`)).body.pagination.total > 0);
+    assert.equal((await logs('?to=2000-01-01')).body.pagination.total, 0);
+    for (const qs of ['?from=nope', '?to=nope', '?from=2026-12-01&to=2026-01-01']) {
+      assert.equal((await logs(qs)).status, 400, qs);
+    }
+  });
+});
+

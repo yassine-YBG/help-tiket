@@ -26,6 +26,17 @@ answers, assigns, follows and resolves them, and admins get a statistics dashboa
 
 ---
 
+
+## Business rules
+All the rules the app follows (roles, tickets, closing, alerts, dashboard, logs) are written in
+[BUSINESS_RULES.md](BUSINESS_RULES.md). Read it before changing the logic.
+
+## Test data (development only)
+`npm run seed` fills a **separate** database with 15 accounts, 60 tickets over the last 90 days,
+conversations and activity logs (password `secret123` for every account). Set `SEED_MONGO_URI` in `.env`
+(the database name must contain `dev`, `test` or `seed`), run the script, then start the API with
+`MONGO_URI` pointing to the same database. It empties that database first and never touches `MONGO_URI`.
+
 ## Features
 
 - **Accounts & roles** — `user`, `admin`, `superadmin`. New accounts must be activated by an admin.
@@ -75,6 +86,7 @@ request saves the token automatically for all other requests.
 | `STATS_TIMEZONE` | | `UTC` | Timezone for the stats timeline (`Africa/Tunis`) |
 | `TRUST_PROXY` | | off | Set to `1` when hosted behind a proxy (Render, Railway, Nginx) |
 | `UPLOAD_DIR` | | `uploads/tickets` | Folder where uploaded files are stored |
+| `SEED_MONGO_URI` | | — | Dev only: separate database for `npm run seed` (name must contain `dev`, `test` or `seed`) |
 
 The server refuses to start if `MONGO_URI` or `JWT_SECRET` is missing.
 
@@ -85,6 +97,7 @@ The server refuses to start if `MONGO_URI` or `JWT_SECRET` is missing.
 | `npm run dev` | Start with auto-restart on file changes (nodemon) |
 | `npm start` | Start for production |
 | `npm test` | Run the automated tests (~10 s) |
+| `npm run seed` | Dev only: fill the `SEED_MONGO_URI` database with test data (see **Test data**) |
 
 ### Tests
 
@@ -101,7 +114,8 @@ The first run downloads a MongoDB binary once (cached afterwards).
 | `tickets.test.js` | create, read, reply, files, download rights, status, priority, archive |
 | `ticketLists.test.js` | ticket lists: pagination, filters, search, sort, injection attempts |
 | `stats.test.js` | dashboard statistics |
-| `activityLogs.test.js` | activity log pagination and filters |
+| `activityLogs.test.js` | activity log pagination, filters, dates, what admins may see |
+| `releaseTickets.test.js` | open tickets go back to the team when support stops working |
 | `app.test.js` | security headers, 404, invalid JSON |
 
 ## Project structure
@@ -214,7 +228,7 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | POST | `/tickets/create` | 👤 | Create a ticket (form-data, files allowed) |
 | GET | `/tickets/my` | 👤 | My tickets (paginated) |
 | GET | `/tickets` | 🛠️ | All tickets (paginated) |
-| GET | `/tickets/summary` | 👤 | Counters for the menu badges (see **Alerts**) |
+| GET | `/tickets/summary` | 👤 | Counters for the menu badges (see **Alerts**; admins also get `pendingUsers`) |
 | GET | `/tickets/:id` | owner or 🛠️ | One ticket with its conversation |
 | POST | `/tickets/reply/:id` | owner or 🛠️ handler | Reply (form-data, files allowed) — not on a resolved ticket |
 | PUT | `/tickets/seen/:id` | owner | The owner opened the ticket (clears "New answer") |
@@ -307,7 +321,9 @@ Example — open, unassigned tickets, most urgent first:
 ### Activity logs (admin)
 
 **GET `/activity-logs`** 🛠️ — newest first, returns `{ logs, pagination }`.
-Filters: `user` (user id), `targetModel` (`User` or `Ticket`), `target` (id of the user/ticket).
+Filters: `user` (user id), `targetModel` (`User` or `Ticket`), `target` (id of the user/ticket),
+`from` / `to` (action date, `2026-10-01`; the `to` day is included).
+**Admins never see what a superadmin did**; the superadmin sees everything.
 
 ### Statistics (admin)
 
@@ -328,7 +344,7 @@ Filters: `user` (user id), `targetModel` (`User` or `Ticket`), `target` (id of t
   "byCategory": [ { "category": "Logiciel", "count": 6 } ],
   "resolutionTime": { "count": 1, "averageHours": 5.2, "fastestHours": 5.2, "slowestHours": 5.2 },
   "firstResponseTime": { "count": 4, "averageHours": 31.5, "fastestHours": 0.4, "slowestHours": 96 },
-  "byAdmin": [ { "adminId": "...", "username": "yassine", "email": "...", "handled": 3, "resolved": 1, "averageResolutionHours": 5.2 } ],
+  "byAdmin": [ { "adminId": "...", "username": "yassine", "email": "...", "handled": 3, "resolved": 1, "averageResolutionHours": 5.2 } ],  // superadmin only
   "timeline": [ { "period": "2026-10-30", "created": 2, "resolved": 1 } ],
   "users": { "total": 7, "pendingActivation": 0, "byRole": { "user": 4, "admin": 2, "superadmin": 1 } }
 }
@@ -337,6 +353,7 @@ Filters: `user` (user id), `targetModel` (`User` or `Ticket`), `target` (id of t
 - **Resolution time** = `resolvedAt − createdAt` (only tickets resolved since `resolvedAt` exists).
 - **First response time** = first reply written by someone other than the ticket creator.
 - Times are in hours (1 decimal); `null` when there is no data.
+- **`byAdmin` (team performance) is only sent to the superadmin**; admins get every other number.
 
 ## Security
 

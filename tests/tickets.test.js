@@ -429,6 +429,7 @@ describe('who must act next (alerts)', () => {
     const s = await summary(admin);
     assert.ok(s.needsReply >= 1);
     assert.equal(typeof s.needsReplyMine, 'number');
+    assert.equal(typeof s.pendingUsers, 'number', 'pending accounts counter for the menu');
   });
 
   it('"needs reply" filter on the admin list (not for users)', async () => {
@@ -496,6 +497,7 @@ describe('who must act next (alerts)', () => {
   it('a normal user cannot read the admin counters', async () => {
     const s = await summary(owner2);
     assert.equal(s.needsReply, undefined);
+    assert.equal(s.pendingUsers, undefined);
   });
 });
 
