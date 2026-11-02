@@ -188,6 +188,11 @@ Call it when the frontend starts, to know who is logged in.
 | PUT | `/auth/users/:id/restore` | 🛠️ | Restore a deleted user |
 | PUT | `/auth/users/:id/role` | 👑 | Change role — body `{ "role": "admin" }` |
 
+**Support account stops working → its open tickets go back to the team.** Deactivating, deleting or
+demoting (to `user`) an admin / superadmin sets `handledBy: null` on their **open** tickets, so another
+admin can take them (resolved tickets keep their handler for the history). The response includes
+`ticketsReleased` (a number).
+
 Rules: nobody can act on their own account · an admin can only manage accounts with role
 `user` · a superadmin can manage everyone else.
 
@@ -199,6 +204,7 @@ Rules: nobody can act on their own account · an admin can only manage accounts 
 | `search` | `?search=ali` | In username, lastname or email |
 | `role` | `?role=admin,superadmin` | One or several roles |
 | `activated` | `?activated=false` | `true` or `false` |
+| `deleted` | `?deleted=true` | `true` = only deleted accounts (to restore them); default: hidden |
 | `sort` | `?sort=name` | `newest` (default), `oldest`, `name` |
 
 ### Tickets

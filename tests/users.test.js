@@ -76,3 +76,15 @@ describe('GET /api/auth/users/pending', () => {
     assert.deepEqual(res.body.map((u) => u.email), ['waiting@test.com']);
   });
 });
+
+describe('deleted accounts list (to restore them)', () => {
+  it('?deleted=true lists only deleted accounts; bad value -> 400', async () => {
+    const res = await list('?deleted=true');
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.users.map((u) => u.email), ['removed@test.com']);
+    assert.equal(res.body.users[0].deleted, true);
+    assert.equal((await list('?deleted=maybe')).status, 400);
+    const normal = await list('?deleted=false');
+    assert.ok(!normal.body.users.some((u) => u.email === 'removed@test.com'));
+  });
+});
