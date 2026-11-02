@@ -88,3 +88,10 @@ describe('deleted accounts list (to restore them)', () => {
     assert.ok(!normal.body.users.some((u) => u.email === 'removed@test.com'));
   });
 });
+
+describe('pending accounts counter (menu)', () => {
+  it('GET /api/tickets/summary counts accounts waiting for activation', async () => {
+    const res = await request(app).get('/api/tickets/summary').set('Authorization', `Bearer ${admin.token}`);
+    assert.equal(res.body.pendingUsers, 1, 'only "waiting" (deleted accounts are not counted)');
+  });
+});

@@ -6,6 +6,7 @@ const { setup, teardown, createUser } = require('./helpers');
 
 let app;
 let admin;
+let boss;
 let user;
 const stats = (qs = '', u = admin) => request(app).get(`/api/stats${qs}`).set('Authorization', `Bearer ${u.token}`);
 
@@ -14,7 +15,7 @@ const HOUR = 36e5;
 before(async () => {
   app = await setup();
   const Ticket = require('../models/Ticket');
-  await createUser({ role: 'superadmin' });
+  boss = await createUser({ role: 'superadmin' });
   admin = await createUser({ role: 'admin', username: 'admin1' });
   user = await createUser();
   await createUser({ activated: false });
@@ -60,8 +61,9 @@ describe('GET /api/stats', () => {
     assert.deepEqual(body.firstResponseTime, { count: 1, averageHours: 1, fastestHours: 1, slowestHours: 1 });
   });
 
-  it('per admin', async () => {
-    const { body } = await stats();
+  it('per admin: the superadmin only (an admin does not get the team table)', async () => {
+    assert.equal((await stats()).body.byAdmin, undefined);
+    const { body } = await stats('', boss);
     assert.equal(body.byAdmin.length, 1);
     assert.equal(body.byAdmin[0].username, 'admin1');
     assert.equal(body.byAdmin[0].handled, 2);
